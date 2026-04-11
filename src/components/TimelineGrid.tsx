@@ -23,6 +23,7 @@ const BLOCK_TOP = 6;
 const BLOCK_HEIGHT = 36;
 const BLOCK_GAP = 6;
 const BLOCK_BOTTOM = 10;
+const TEAM_HEADER_HEIGHT = 36;
 
 const DAY_NAMES = ['вс', 'пн', 'вт', 'ср', 'чт', 'пт', 'сб'];
 
@@ -71,6 +72,21 @@ interface DragState {
 interface BlockLaneLayout {
   laneByPhaseId: Map<string, number>;
   laneCount: number;
+}
+
+interface PersonRowData {
+  person: Person;
+  personBlocks: PhaseBlock[];
+  loads: DayLoad[];
+  overloaded: boolean;
+  conflictCount: number;
+  laneLayout: BlockLaneLayout;
+  conflictDays: Set<number>;
+  rowHeight: number;
+}
+
+interface PositionedPersonRow extends PersonRowData {
+  top: number;
 }
 
 function buildBlockLaneLayout(blocks: PhaseBlock[]): BlockLaneLayout {
@@ -131,11 +147,43 @@ function isTestPhase(label: string): boolean {
   );
 }
 
+function getRoleSortPriority(role: string): number {
+  const normalized = normalizeText(role);
+
+  if (
+    normalized.includes('тест') ||
+    normalized.includes('qa') ||
+    normalized.includes('tester') ||
+    normalized.includes('test')
+  ) {
+    return 0;
+  }
+
+  if (
+    normalized.includes('разработ') ||
+    normalized.includes('developer') ||
+    normalized.includes('dev')
+  ) {
+    return 1;
+  }
+
+  return 2;
+}
+
+function sortPeopleForTimeline(items: Person[]): Person[] {
+  return [...items].sort((a, b) => {
+    const rolePriority = getRoleSortPriority(a.role) - getRoleSortPriority(b.role);
+    if (rolePriority !== 0) return rolePriority;
+    return a.name.localeCompare(b.name, 'ru');
+  });
+}
+
 export function TimelineGrid({
   teams, people, tasks, blocks, sprintDays, startDate,
   onUpdateTask, onDeleteTask, onToggleTeam,
 }: Props) {
   const [editingTask, setEditingTask] = useState<Task | null>(null);
+  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [tooltip, setTooltip] = useState<Tooltip | null>(null);
   const [drag, setDrag] = useState<DragState | null>(null);
   const [containerWidth, setContainerWidth] = useState(0);
@@ -216,22 +264,92 @@ export function TimelineGrid({
 
   const teamRows = teams.map(team => ({
     team,
-    members: people.filter(p => p.teamId === team.id),
+    members: sortPeopleForTimeline(people.filter(p => p.teamId === team.id)),
   }));
-  const orphans = people.filter(p => !teams.find(t => t.id === p.teamId));
+  const orphans = sortPeopleForTimeline(people.filter(p => !teams.find(t => t.id === p.teamId)));
+
+  const rowDataByPersonId = new Map<string, PersonRowData>(
+    people.map(person => {
+      const personBlocks = blocks.filter(b => b.assigneeId === person.id);
+      const loads: DayLoad[] = computePersonLoad(person.id, blocks, sprintDays);
+      const overloaded = loads.some(l => l === 2);
+      const conflictCount = personBlocks.filter(b => b.hasConflict).length;
+      const laneLayout = buildBlockLaneLayout(personBlocks);
+      const conflictDays = getConflictDays(personBlocks, sprintDays);
+      const rowHeight = Math.max(
+        ROW_HEIGHT,
+        BLOCK_TOP + laneLayout.laneCount * BLOCK_HEIGHT + (laneLayout.laneCount - 1) * BLOCK_GAP + BLOCK_BOTTOM
+      );
+
+      return [person.id, {
+        person,
+        personBlocks,
+        loads,
+        overloaded,
+        conflictCount,
+        laneLayout,
+        conflictDays,
+        rowHeight,
+      }];
+    })
+  );
+
+  const positionedRows: PositionedPersonRow[] = [];
+  let bodyHeight = 0;
+
+  for (const { team, members } of teamRows) {
+    bodyHeight += TEAM_HEADER_HEIGHT;
+    if (team.collapsed) continue;
+
+    for (const member of members) {
+      const rowData = rowDataByPersonId.get(member.id);
+      if (!rowData) continue;
+      positionedRows.push({ ...rowData, top: bodyHeight });
+      bodyHeight += rowData.rowHeight;
+    }
+  }
+
+  for (const orphan of orphans) {
+    const rowData = rowDataByPersonId.get(orphan.id);
+    if (!rowData) continue;
+    positionedRows.push({ ...rowData, top: bodyHeight });
+    bodyHeight += rowData.rowHeight;
+  }
+
+  const selectedTask = selectedTaskId ? getTask(selectedTaskId) : null;
+  const selectedBlockPositions = new Map<string, { left: number; right: number; top: number; bottom: number; centerY: number }>();
+
+  if (selectedTask) {
+    for (const row of positionedRows) {
+      for (const block of row.personBlocks) {
+        if (block.taskId !== selectedTask.id) continue;
+        const lane = row.laneLayout.laneByPhaseId.get(block.phaseId) ?? 0;
+        const top = row.top + BLOCK_TOP + lane * (BLOCK_HEIGHT + BLOCK_GAP);
+        selectedBlockPositions.set(block.phaseId, {
+          left: block.startDay * dayWidth + 1,
+          right: block.endDay * dayWidth - 1,
+          top,
+          bottom: top + BLOCK_HEIGHT,
+          centerY: top + BLOCK_HEIGHT / 2,
+        });
+      }
+    }
+  }
+
+  const selectedTaskConnections = selectedTask
+    ? selectedTask.phases
+        .map(phase => selectedBlockPositions.get(phase.id))
+        .flatMap((position, index, all) => {
+          const next = all[index + 1];
+          if (!position || !next) return [];
+          return [{ from: position, to: next }];
+        })
+    : [];
 
   const renderPersonRow = (person: Person) => {
-    const personBlocks = blocks.filter(b => b.assigneeId === person.id);
-    const loads: DayLoad[] = computePersonLoad(person.id, blocks, sprintDays);
-    const overloaded = loads.some(l => l === 2);
-    const conflictCount = personBlocks.filter(b => b.hasConflict).length;
-    const laneLayout = buildBlockLaneLayout(personBlocks);
-    const conflictDays = getConflictDays(personBlocks, sprintDays);
-    const rowHeight = Math.max(
-      ROW_HEIGHT,
-      BLOCK_TOP + laneLayout.laneCount * BLOCK_HEIGHT + (laneLayout.laneCount - 1) * BLOCK_GAP + BLOCK_BOTTOM
-    );
-
+    const rowData = rowDataByPersonId.get(person.id);
+    if (!rowData) return null;
+    const { personBlocks, loads, overloaded, conflictCount, laneLayout, conflictDays, rowHeight } = rowData;
     return (
       <div
         key={person.id}
@@ -325,8 +443,12 @@ export function TimelineGrid({
             const isExt = block.isExternal;
             const lane = laneLayout.laneByPhaseId.get(block.phaseId) ?? 0;
             const top = BLOCK_TOP + lane * (BLOCK_HEIGHT + BLOCK_GAP);
+            const isSelectedTask = selectedTaskId === block.taskId;
+            const isDimmed = selectedTaskId !== null && !isSelectedTask;
             const boxShadow = isDraggingThis
               ? '0 12px 24px rgba(6, 182, 212, 0.18)'
+              : isSelectedTask
+                ? '0 0 0 2px rgba(14, 165, 233, 0.35), 0 14px 28px rgba(14, 165, 233, 0.18)'
               : isConflict
                 ? '0 0 0 2px rgba(239, 68, 68, 0.28), 0 10px 20px rgba(239, 68, 68, 0.12)'
                 : undefined;
@@ -337,10 +459,13 @@ export function TimelineGrid({
                 className={`absolute select-none rounded-md
                   ${isDraggingThis
                     ? 'shadow-lg ring-2 ring-cyan-400 z-10 opacity-90'
+                    : isSelectedTask
+                      ? 'ring-2 ring-sky-400 z-10'
                     : isConflict
                       ? 'ring-1 ring-red-400 cursor-grab'
                       : 'hover:brightness-90 cursor-grab'
                   }`}
+                data-task-block="true"
                 style={{
                   top,
                   height: BLOCK_HEIGHT,
@@ -357,10 +482,13 @@ export function TimelineGrid({
                     : `3px solid ${isConflict ? '#ef4444' : block.taskColor}`,
                   boxShadow,
                   cursor: isDraggingThis ? 'grabbing' : 'grab',
+                  opacity: isDimmed ? 0.14 : 1,
                   transition: isDraggingThis ? 'none' : undefined,
                   userSelect: 'none',
+                  zIndex: isSelectedTask ? 15 : isConflict ? 8 : 5,
                 }}
                 onMouseDown={e => {
+                  if (e.button !== 0) return;
                   e.preventDefault();
                   const task = getTask(block.taskId);
                   if (!task) return;
@@ -379,9 +507,13 @@ export function TimelineGrid({
                 onMouseUp={_e => {
                   // Click = drag moved 0 days
                   if (drag && drag.deltaDays === 0) {
-                    const t = getTask(block.taskId);
-                    if (t) setEditingTask(t);
+                    setSelectedTaskId(block.taskId);
                   }
+                }}
+                onContextMenu={e => {
+                  e.preventDefault();
+                  const task = getTask(block.taskId);
+                  if (task) setEditingTask(task);
                 }}
                 onMouseEnter={e => {
                   if (drag) return;
@@ -446,6 +578,19 @@ export function TimelineGrid({
     };
   }, [!!drag]);
 
+  useEffect(() => {
+    if (!selectedTaskId) return;
+
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (target?.closest('[data-task-block="true"]')) return;
+      setSelectedTaskId(null);
+    };
+
+    window.addEventListener('pointerdown', handlePointerDown, true);
+    return () => window.removeEventListener('pointerdown', handlePointerDown, true);
+  }, [selectedTaskId]);
+
   return (
     <>
       {/* Single scrolling container — both x and y */}
@@ -485,36 +630,68 @@ export function TimelineGrid({
             })}
           </div>
 
-          {/* Team groups */}
-          {teamRows.map(({ team, members }) => (
-            <div key={team.id}>
-              {/* Team header */}
-              <div
-                className="flex items-center gap-2 px-4 py-2 bg-slate-50 border-b border-slate-200 cursor-pointer hover:bg-slate-100 transition-colors"
-                onClick={() => onToggleTeam(team.id)}
+          <div className="relative">
+            {selectedTaskConnections.length > 0 && (
+              <svg
+                className="absolute top-0 pointer-events-none z-10 overflow-visible"
+                style={{ left: LABEL_WIDTH, width: sprintDays * dayWidth, height: bodyHeight }}
               >
-                <svg
-                  className={`w-3 h-3 text-slate-400 transition-transform flex-shrink-0 ${team.collapsed ? '' : 'rotate-90'}`}
-                  fill="currentColor" viewBox="0 0 20 20"
+                {selectedTaskConnections.map(({ from, to }, index) => {
+                  const entersFromTop = to.centerY > from.centerY;
+                  const targetY = entersFromTop ? to.top : to.bottom;
+                  const sourceY = entersFromTop ? from.bottom : from.top;
+                  const elbowX = from.right + Math.max(16, (to.left - from.right) / 2);
+                  const targetX = to.left + (to.right - to.left) / 2;
+                  const path = `M ${from.right} ${sourceY} L ${elbowX} ${sourceY} L ${elbowX} ${targetY} L ${targetX} ${targetY}`;
+
+                  return (
+                    <path
+                      key={index}
+                      d={path}
+                      fill="none"
+                      stroke="#0ea5e9"
+                      strokeWidth="2.5"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeDasharray="6 5"
+                    />
+                  );
+                })}
+              </svg>
+            )}
+
+            {/* Team groups */}
+            {teamRows.map(({ team, members }) => (
+              <div key={team.id}>
+                {/* Team header */}
+                <div
+                  className="flex items-center gap-2 px-4 py-2 bg-slate-50 border-b border-slate-200 cursor-pointer hover:bg-slate-100 transition-colors"
+                  style={{ height: TEAM_HEADER_HEIGHT }}
+                  onClick={() => onToggleTeam(team.id)}
                 >
-                  <path fillRule="evenodd" d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z" clipRule="evenodd" />
-                </svg>
-                <span className="text-[11px] font-bold text-slate-500 uppercase tracking-widest">{team.name}</span>
-                <span className="text-[10px] text-slate-400">({members.length})</span>
+                  <svg
+                    className={`w-3 h-3 text-slate-400 transition-transform flex-shrink-0 ${team.collapsed ? '' : 'rotate-90'}`}
+                    fill="currentColor" viewBox="0 0 20 20"
+                  >
+                    <path fillRule="evenodd" d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z" clipRule="evenodd" />
+                  </svg>
+                  <span className="text-[11px] font-bold text-slate-500 uppercase tracking-widest">{team.name}</span>
+                  <span className="text-[10px] text-slate-400">({members.length})</span>
+                </div>
+                {!team.collapsed && members.map(renderPersonRow)}
               </div>
-              {!team.collapsed && members.map(renderPersonRow)}
-            </div>
-          ))}
+            ))}
 
-          {/* Orphan people */}
-          {orphans.map(renderPersonRow)}
+            {/* Orphan people */}
+            {orphans.map(renderPersonRow)}
 
-          {/* Empty state */}
-          {people.length === 0 && (
-            <div className="flex items-center justify-center py-24 text-slate-400 text-sm">
-              Добавьте участников через кнопку «Команда»
-            </div>
-          )}
+            {/* Empty state */}
+            {people.length === 0 && (
+              <div className="flex items-center justify-center py-24 text-slate-400 text-sm">
+                Добавьте участников через кнопку «Команда»
+              </div>
+            )}
+          </div>
         </div>
       </div>
 
