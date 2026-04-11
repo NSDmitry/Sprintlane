@@ -21,6 +21,76 @@ export function LeftPanel({ tasks, people, blocks, onEditTask, onDeleteTask, onN
   const filtered = tasks.filter(t =>
     t.name.toLowerCase().includes(search.toLowerCase())
   );
+  const sprintGoalTasks = filtered.filter(task => task.sprintGoal);
+  const otherTasks = filtered.filter(task => !task.sprintGoal);
+
+  const renderTaskCard = (task: Task) => {
+    const conflict = taskHasConflict(task.id);
+    const taskBlocks = blocks.filter(b => b.taskId === task.id);
+    const taskColor = taskBlocks[0]?.taskColor ?? '#3b82f6';
+
+    return (
+      <div
+        key={task.id}
+        className="mx-2 mb-1 rounded-lg border border-slate-200 bg-white hover:border-cyan-300 hover:shadow-sm transition-all cursor-pointer group"
+        onClick={() => onEditTask(task)}
+      >
+        <div className="flex items-start gap-2 px-3 py-2">
+          <div
+            className="w-1 rounded-full flex-shrink-0 mt-0.5"
+            style={{ background: taskColor, height: conflict ? 'auto' : 'auto', minHeight: 16 }}
+          />
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-1">
+              {conflict && <span className="text-red-500 text-xs flex-shrink-0">⚠</span>}
+              <span className="text-xs font-semibold text-slate-800 truncate leading-snug">
+                {task.name}
+              </span>
+              {task.sprintGoal && <span className="text-xs flex-shrink-0" title="Цель спринта">🔥</span>}
+            </div>
+            <div className="flex flex-wrap gap-1 mt-1">
+              {task.phases.map(phase => {
+                const person = getPerson(phase.assigneeId);
+                return (
+                  <span
+                    key={phase.id}
+                    className="inline-flex items-center gap-1 text-[10px] text-slate-500"
+                  >
+                    <span
+                      className="w-1.5 h-1.5 rounded-full flex-shrink-0"
+                      style={{ background: person?.color ?? '#94a3b8' }}
+                    />
+                    {phase.label}
+                    {person ? ` · ${person.name}` : ''}
+                  </span>
+                );
+              })}
+            </div>
+          </div>
+          <button
+            className="opacity-0 group-hover:opacity-100 text-slate-300 hover:text-red-400 transition-all text-sm leading-none flex-shrink-0"
+            onClick={e => { e.stopPropagation(); onDeleteTask(task.id); }}
+            title="Удалить"
+          >
+            ×
+          </button>
+        </div>
+      </div>
+    );
+  };
+
+  const renderSection = (title: string, items: Task[]) => {
+    if (items.length === 0) return null;
+
+    return (
+      <div className="mb-3">
+        <div className="px-4 pb-1 pt-2 text-[10px] font-bold uppercase tracking-[0.18em] text-slate-400">
+          {title}
+        </div>
+        <div>{items.map(renderTaskCard)}</div>
+      </div>
+    );
+  };
 
   return (
     <div className="w-64 flex-shrink-0 bg-white border-r border-slate-200 flex flex-col h-full">
@@ -51,62 +121,8 @@ export function LeftPanel({ tasks, people, blocks, onEditTask, onDeleteTask, onN
             {tasks.length === 0 ? 'Нет задач. Нажмите + чтобы добавить.' : 'Ничего не найдено'}
           </div>
         )}
-        {filtered.map(task => {
-          const conflict = taskHasConflict(task.id);
-          const taskBlocks = blocks.filter(b => b.taskId === task.id);
-          const taskColor = taskBlocks[0]?.taskColor ?? '#3b82f6';
-
-          return (
-            <div
-              key={task.id}
-              className="mx-2 mb-1 rounded-lg border border-slate-200 bg-white hover:border-cyan-300 hover:shadow-sm transition-all cursor-pointer group"
-              onClick={() => onEditTask(task)}
-            >
-              {/* Color stripe + task name */}
-              <div className="flex items-start gap-2 px-3 py-2">
-                <div
-                  className="w-1 rounded-full flex-shrink-0 mt-0.5"
-                  style={{ background: taskColor, height: conflict ? 'auto' : 'auto', minHeight: 16 }}
-                />
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-1">
-                    {conflict && <span className="text-red-500 text-xs flex-shrink-0">⚠</span>}
-                    <span className="text-xs font-semibold text-slate-800 truncate leading-snug">
-                      {task.name}
-                    </span>
-                    {task.sprintGoal && <span className="text-xs flex-shrink-0" title="Цель спринта">🔥</span>}
-                  </div>
-                  {/* Phase assignees */}
-                  <div className="flex flex-wrap gap-1 mt-1">
-                    {task.phases.map(phase => {
-                      const person = getPerson(phase.assigneeId);
-                      return (
-                        <span
-                          key={phase.id}
-                          className="inline-flex items-center gap-1 text-[10px] text-slate-500"
-                        >
-                          <span
-                            className="w-1.5 h-1.5 rounded-full flex-shrink-0"
-                            style={{ background: person?.color ?? '#94a3b8' }}
-                          />
-                          {phase.label}
-                          {person ? ` · ${person.name}` : ''}
-                        </span>
-                      );
-                    })}
-                  </div>
-                </div>
-                <button
-                  className="opacity-0 group-hover:opacity-100 text-slate-300 hover:text-red-400 transition-all text-sm leading-none flex-shrink-0"
-                  onClick={e => { e.stopPropagation(); onDeleteTask(task.id); }}
-                  title="Удалить"
-                >
-                  ×
-                </button>
-              </div>
-            </div>
-          );
-        })}
+        {renderSection('Цели Спринта', sprintGoalTasks)}
+        {renderSection('Остальные Задачи', otherTasks)}
       </div>
 
       {/* Footer stats */}
