@@ -53,20 +53,55 @@ const TASK_COLORS = [
   '#ef4444', '#ec4899', '#14b8a6', '#f97316', '#6366f1',
 ];
 
+export interface ScheduledPhase {
+  phaseId: string;
+  startDay: number;
+  endDay: number;
+}
+
+export function computeTaskPhaseSchedule(task: Task, startDate: string): ScheduledPhase[] {
+  const schedule: ScheduledPhase[] = [];
+  let cursor = snapToWorkingDay(startDate, task.startDay);
+
+  for (const phase of task.phases) {
+    if (phase.durationDays <= 0) continue;
+
+    const manualStart =
+      typeof phase.startAfterDays === 'number'
+        ? snapToWorkingDay(startDate, task.startDay + phase.startAfterDays)
+        : null;
+
+    const phaseStart = manualStart ?? snapToWorkingDay(startDate, cursor);
+    const phaseEnd = calcEndDay(startDate, phaseStart, phase.durationDays);
+
+    schedule.push({
+      phaseId: phase.id,
+      startDay: phaseStart,
+      endDay: phaseEnd,
+    });
+
+    cursor = Math.max(cursor, phaseEnd);
+  }
+
+  return schedule;
+}
+
 export function computePhaseBlocks(tasks: Task[], startDate: string): PhaseBlock[] {
   const blocks: Omit<PhaseBlock, 'hasConflict'>[] = [];
 
   tasks.forEach((task, taskIdx) => {
     const taskColor = task.color ?? TASK_COLORS[taskIdx % TASK_COLORS.length];
-    let cursor = snapToWorkingDay(startDate, task.startDay);
     let lastAssigneeId = '';
+    const scheduleByPhaseId = new Map(
+      computeTaskPhaseSchedule(task, startDate).map(item => [item.phaseId, item] as const)
+    );
 
     for (const phase of task.phases) {
       if (phase.durationDays <= 0) continue;
-      cursor = snapToWorkingDay(startDate, cursor);
-
-      const phaseStart = cursor;
-      const phaseEnd = calcEndDay(startDate, phaseStart, phase.durationDays);
+      const scheduled = scheduleByPhaseId.get(phase.id);
+      if (!scheduled) continue;
+      const phaseStart = scheduled.startDay;
+      const phaseEnd = scheduled.endDay;
 
       const hasAssignee = !!phase.assigneeId;
       const displayAssigneeId = hasAssignee ? phase.assigneeId : lastAssigneeId;
@@ -76,6 +111,7 @@ export function computePhaseBlocks(tasks: Task[], startDate: string): PhaseBlock
           taskId: task.id,
           taskName: task.name,
           taskColor,
+          taskIsSprintGoal: task.sprintGoal,
           phaseId: phase.id,
           phaseLabel: phase.label,
           assigneeId: displayAssigneeId,
@@ -86,7 +122,6 @@ export function computePhaseBlocks(tasks: Task[], startDate: string): PhaseBlock
       }
 
       if (hasAssignee) lastAssigneeId = phase.assigneeId;
-      cursor = phaseEnd;
     }
   });
 

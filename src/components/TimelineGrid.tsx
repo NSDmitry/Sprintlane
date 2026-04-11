@@ -19,6 +19,10 @@ const LABEL_WIDTH = 200;
 const ROW_HEIGHT = 52;
 const HEADER_HEIGHT = 52;
 const MIN_DAY_WIDTH = 24; // px — minimum before horizontal scroll kicks in
+const BLOCK_TOP = 6;
+const BLOCK_HEIGHT = 36;
+const BLOCK_GAP = 6;
+const BLOCK_BOTTOM = 10;
 
 const DAY_NAMES = ['вс', 'пн', 'вт', 'ср', 'чт', 'пт', 'сб'];
 
@@ -55,10 +59,76 @@ interface Tooltip {
 }
 
 interface DragState {
+  mode: 'task' | 'phase';
   taskId: string;
+  phaseId: string;
   originalStartDay: number;
+  minStartDay: number;
   mouseStartX: number;
   deltaDays: number;
+}
+
+interface BlockLaneLayout {
+  laneByPhaseId: Map<string, number>;
+  laneCount: number;
+}
+
+function buildBlockLaneLayout(blocks: PhaseBlock[]): BlockLaneLayout {
+  const laneByPhaseId = new Map<string, number>();
+  const laneEndDays: number[] = [];
+
+  const sortedBlocks = [...blocks].sort((a, b) => {
+    if (a.startDay !== b.startDay) return a.startDay - b.startDay;
+    if (a.endDay !== b.endDay) return a.endDay - b.endDay;
+    return a.phaseId.localeCompare(b.phaseId);
+  });
+
+  for (const block of sortedBlocks) {
+    let lane = laneEndDays.findIndex(endDay => endDay <= block.startDay);
+    if (lane === -1) {
+      lane = laneEndDays.length;
+      laneEndDays.push(block.endDay);
+    } else {
+      laneEndDays[lane] = block.endDay;
+    }
+    laneByPhaseId.set(block.phaseId, lane);
+  }
+
+  return {
+    laneByPhaseId,
+    laneCount: Math.max(1, laneEndDays.length),
+  };
+}
+
+function getConflictDays(personBlocks: PhaseBlock[], totalDays: number): Set<number> {
+  const days = new Set<number>();
+
+  for (let day = 0; day < totalDays; day++) {
+    const overlappingCount = personBlocks.filter(block => {
+      if (block.isExternal) return false;
+      return block.startDay < day + 1 && day < block.endDay;
+    }).length;
+
+    if (overlappingCount > 1) {
+      days.add(day);
+    }
+  }
+
+  return days;
+}
+
+function normalizeText(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+function isTestPhase(label: string): boolean {
+  const normalized = normalizeText(label);
+  return (
+    normalized === 'test' ||
+    normalized === 'qa' ||
+    normalized.includes('тест') ||
+    normalized.includes('qa')
+  );
 }
 
 export function TimelineGrid({
@@ -96,7 +166,7 @@ export function TimelineGrid({
       if (!d) return;
       const deltaX = e.clientX - d.mouseStartX;
       const rawDelta = Math.round(deltaX / dayWidth);
-      const newStart = Math.max(0, d.originalStartDay + rawDelta);
+      const newStart = Math.max(d.minStartDay, d.originalStartDay + rawDelta);
       const deltaDays = newStart - d.originalStartDay;
       if (deltaDays !== d.deltaDays) {
         setDrag(prev => prev ? { ...prev, deltaDays } : null);
@@ -108,8 +178,21 @@ export function TimelineGrid({
       if (!d) return;
       const task = tasks.find(t => t.id === d.taskId);
       if (task) {
-        const newStartDay = Math.max(0, d.originalStartDay + d.deltaDays);
-        if (newStartDay !== task.startDay) {
+        const newStartDay = Math.max(d.minStartDay, d.originalStartDay + d.deltaDays);
+        if (d.mode === 'phase') {
+          const phase = task.phases.find(item => item.id === d.phaseId);
+          const nextStartAfterDays = Math.max(0, newStartDay - task.startDay);
+          if (phase && phase.startAfterDays !== nextStartAfterDays) {
+            onUpdateTask({
+              ...task,
+              phases: task.phases.map(item =>
+                item.id === d.phaseId
+                  ? { ...item, startAfterDays: nextStartAfterDays }
+                  : item
+              ),
+            });
+          }
+        } else if (newStartDay !== task.startDay) {
           onUpdateTask({ ...task, startDay: newStartDay });
         }
       }
@@ -142,12 +225,18 @@ export function TimelineGrid({
     const loads: DayLoad[] = computePersonLoad(person.id, blocks, sprintDays);
     const overloaded = loads.some(l => l === 2);
     const conflictCount = personBlocks.filter(b => b.hasConflict).length;
+    const laneLayout = buildBlockLaneLayout(personBlocks);
+    const conflictDays = getConflictDays(personBlocks, sprintDays);
+    const rowHeight = Math.max(
+      ROW_HEIGHT,
+      BLOCK_TOP + laneLayout.laneCount * BLOCK_HEIGHT + (laneLayout.laneCount - 1) * BLOCK_GAP + BLOCK_BOTTOM
+    );
 
     return (
       <div
         key={person.id}
         className={`flex border-b border-slate-100 ${overloaded ? 'bg-red-50/30' : 'bg-white hover:bg-slate-50/50'} transition-colors`}
-        style={{ height: ROW_HEIGHT }}
+        style={{ height: rowHeight }}
       >
         {/* Person label — fixed width */}
         <div
@@ -193,11 +282,13 @@ export function TimelineGrid({
           {/* Grid columns */}
           {Array.from({ length: sprintDays }, (_, i) => {
             const { isWeekend: wk, isToday } = getDayMeta(startDate, i);
+            const isConflictDay = conflictDays.has(i);
             return (
               <div
                 key={i}
                 className={`absolute inset-y-0 border-r ${
-                  wk ? 'bg-red-50/70 border-red-100'
+                  isConflictDay ? 'bg-red-100/70 border-red-200'
+                    : wk ? 'bg-red-50/70 border-red-100'
                     : isToday ? 'bg-cyan-50/40 border-cyan-100'
                     : 'border-slate-100'
                 }`}
@@ -223,12 +314,22 @@ export function TimelineGrid({
 
           {/* Phase blocks */}
           {personBlocks.map(block => {
-            const isDraggingThis = drag?.taskId === block.taskId;
+            const isDraggingThis =
+              drag?.mode === 'phase'
+                ? drag.phaseId === block.phaseId
+                : drag?.taskId === block.taskId;
             const dragOffset = isDraggingThis ? drag!.deltaDays * dayWidth : 0;
             const left = block.startDay * dayWidth + dragOffset;
             const width = (block.endDay - block.startDay) * dayWidth;
             const isConflict = block.hasConflict && !isDraggingThis;
             const isExt = block.isExternal;
+            const lane = laneLayout.laneByPhaseId.get(block.phaseId) ?? 0;
+            const top = BLOCK_TOP + lane * (BLOCK_HEIGHT + BLOCK_GAP);
+            const boxShadow = isDraggingThis
+              ? '0 12px 24px rgba(6, 182, 212, 0.18)'
+              : isConflict
+                ? '0 0 0 2px rgba(239, 68, 68, 0.28), 0 10px 20px rgba(239, 68, 68, 0.12)'
+                : undefined;
 
             return (
               <div
@@ -241,19 +342,20 @@ export function TimelineGrid({
                       : 'hover:brightness-90 cursor-grab'
                   }`}
                 style={{
-                  top: 6,
-                  bottom: 10,
+                  top,
+                  height: BLOCK_HEIGHT,
                   left: left + 1,
                   width: Math.max(width - 2, 6),
-                  background: isExt ? '#f1f5f9' : isConflict ? '#fecaca' : `${block.taskColor}30`,
+                  background: isExt ? '#f1f5f9' : isConflict ? '#fee2e2' : `${block.taskColor}30`,
                   border: isExt
                     ? '1.5px dashed #94a3b8'
                     : isConflict
-                      ? `1px solid #f87171`
+                      ? '1px solid #ef4444'
                       : `none`,
                   borderLeft: isExt
                     ? '3px dashed #94a3b8'
                     : `3px solid ${isConflict ? '#ef4444' : block.taskColor}`,
+                  boxShadow,
                   cursor: isDraggingThis ? 'grabbing' : 'grab',
                   transition: isDraggingThis ? 'none' : undefined,
                   userSelect: 'none',
@@ -262,10 +364,14 @@ export function TimelineGrid({
                   e.preventDefault();
                   const task = getTask(block.taskId);
                   if (!task) return;
+                  const dragMode: DragState['mode'] = isTestPhase(block.phaseLabel) ? 'phase' : 'task';
                   setTooltip(null);
                   setDrag({
+                    mode: dragMode,
                     taskId: block.taskId,
-                    originalStartDay: task.startDay,
+                    phaseId: block.phaseId,
+                    originalStartDay: dragMode === 'phase' ? block.startDay : task.startDay,
+                    minStartDay: dragMode === 'phase' ? task.startDay : 0,
                     mouseStartX: e.clientX,
                     deltaDays: 0,
                   });
@@ -289,12 +395,18 @@ export function TimelineGrid({
                 }}
                 onMouseLeave={() => setTooltip(null)}
               >
-                <div className="px-1.5 h-full flex flex-col justify-center overflow-hidden">
+                {isConflict && (
+                  <div className="absolute top-1.5 right-1.5 flex h-4 w-4 items-center justify-center rounded-full bg-red-600 text-[10px] font-bold text-white shadow-sm pointer-events-none">
+                    !
+                  </div>
+                )}
+                <div className="px-1.5 h-full flex flex-col justify-center overflow-hidden pr-5">
                   <div
                     className="text-[11px] font-semibold truncate leading-tight"
                     style={{ color: isExt ? '#64748b' : isConflict ? '#b91c1c' : block.taskColor }}
                   >
                     {block.taskName}
+                    {block.taskIsSprintGoal ? ' 🔥' : ''}
                   </div>
                   {width >= 64 && (
                     <div className={`text-[10px] truncate leading-tight ${isExt ? 'text-slate-400' : isConflict ? 'text-red-400' : 'text-slate-400'}`}>
@@ -302,6 +414,15 @@ export function TimelineGrid({
                     </div>
                   )}
                 </div>
+                {isConflict && (
+                  <div
+                    className="absolute left-2 right-2 pointer-events-none"
+                    style={{
+                      top: BLOCK_HEIGHT + 2,
+                      borderTop: '1px dashed rgba(239, 68, 68, 0.45)',
+                    }}
+                  />
+                )}
               </div>
             );
           })}
@@ -403,7 +524,10 @@ export function TimelineGrid({
           className="fixed z-50 bg-slate-900 text-white text-xs rounded-xl px-4 py-3 shadow-2xl pointer-events-none"
           style={{ left: Math.min(tooltip.x, window.innerWidth - 240), top: tooltip.y }}
         >
-          <div className="font-bold text-sm mb-1.5">{tooltip.block.taskName}</div>
+          <div className="font-bold text-sm mb-1.5">
+            {tooltip.block.taskName}
+            {tooltip.block.taskIsSprintGoal ? ' 🔥' : ''}
+          </div>
           <div className="flex flex-col gap-0.5 text-slate-300">
             <div className="flex items-center gap-2">
               <span className="text-slate-500">Фаза</span>

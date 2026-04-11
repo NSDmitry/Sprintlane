@@ -2,7 +2,7 @@ import { useState } from 'react';
 import type { Task, Phase, Person } from '../types';
 import { Modal } from './Modal';
 import { generateId } from '../store';
-import { daysToHours, hoursToDays, formatDuration, HOURS_PER_DAY, snapToWorkingDay, isWeekend } from '../conflicts';
+import { daysToHours, hoursToDays, formatDuration, HOURS_PER_DAY, computeTaskPhaseSchedule } from '../conflicts';
 
 interface Props {
   task: Task | null;
@@ -48,38 +48,6 @@ function diffDaysISO(fromISO: string, toISO: string): number {
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
-}
-
-function calcEndDayPosition(startDate: string, startDay: number, phases: Phase[]): number {
-  let cursor = snapToWorkingDay(startDate, startDay);
-
-  for (const phase of phases) {
-    if (phase.durationDays <= 0) continue;
-
-    cursor = snapToWorkingDay(startDate, cursor);
-    let remaining = phase.durationDays;
-
-    while (remaining > 1e-9) {
-      const dayIdx = Math.floor(cursor);
-      if (isWeekend(startDate, dayIdx)) {
-        cursor = dayIdx + 1;
-        continue;
-      }
-
-      const fracInDay = cursor - dayIdx;
-      const capacityLeft = 1 - fracInDay;
-
-      if (remaining <= capacityLeft) {
-        cursor += remaining;
-        remaining = 0;
-      } else {
-        remaining -= capacityLeft;
-        cursor = dayIdx + 1;
-      }
-    }
-  }
-
-  return cursor;
 }
 
 function dayPositionToISO(startDate: string, dayPosition: number): string {
@@ -144,8 +112,13 @@ function isAllowedForPhase(person: Person, phase: Phase): boolean {
   return true;
 }
 
+function formatOffsetDays(days: number): string {
+  return formatDuration(days);
+}
+
 export function TaskEditor({ task, people, sprintDays, startDate, onSave, onDelete, onClose }: Props) {
   const [name, setName] = useState(task?.name ?? '');
+  const [sprintGoal, setSprintGoal] = useState(task?.sprintGoal ?? false);
   const sprintEndDate = addDaysISO(startDate, Math.max(sprintDays - 1, 0));
   const initialStartDate = addDaysISO(
     startDate,
@@ -175,9 +148,17 @@ export function TaskEditor({ task, people, sprintDays, startDate, onSave, onDele
 
   const totalDuration = phases.reduce((s, p) => s + (p.durationDays || 0), 0);
   const startDay = clamp(diffDaysISO(startDate, selectedStartDate), 0, Math.max(sprintDays - 1, 0));
-  const overflow = startDay + totalDuration > sprintDays;
-  const completionDayPosition = calcEndDayPosition(startDate, startDay, phases);
+  const previewTask: Task = {
+    id: task?.id ?? 'preview',
+    name: name.trim() || 'preview',
+    sprintGoal,
+    startDay,
+    phases,
+  };
+  const phaseSchedule = computeTaskPhaseSchedule(previewTask, startDate);
+  const completionDayPosition = phaseSchedule.reduce((max, phase) => Math.max(max, phase.endDay), startDay);
   const completionDate = dayPositionToISO(startDate, completionDayPosition);
+  const overflow = completionDayPosition > sprintDays;
 
   const handleSave = () => {
     const n = name.trim();
@@ -185,6 +166,7 @@ export function TaskEditor({ task, people, sprintDays, startDate, onSave, onDele
     onSave({
       id: task?.id ?? generateId(),
       name: n,
+      sprintGoal,
       startDay,
       phases: phases.filter(p => p.durationDays > 0),
     });
@@ -210,6 +192,19 @@ export function TaskEditor({ task, people, sprintDays, startDate, onSave, onDele
             <div>Предполагаемая дата завершения: {formatHumanDate(completionDate)}</div>
           </div>
         </div>
+
+        <label className="flex items-center gap-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 cursor-pointer">
+          <input
+            type="checkbox"
+            className="h-4 w-4 rounded border-slate-300 text-cyan-500 focus:ring-cyan-400"
+            checked={sprintGoal}
+            onChange={e => setSprintGoal(e.target.checked)}
+          />
+          <div>
+            <div className="text-sm font-medium text-slate-700">Цель спринта</div>
+            <div className="text-xs text-slate-400">Отмеченные задачи будут отображаться с огоньком.</div>
+          </div>
+        </label>
 
         {/* Start date */}
         <div>
@@ -311,6 +306,38 @@ export function TaskEditor({ task, people, sprintDays, startDate, onSave, onDele
                         durationDays: hoursToDays(Math.max(1, Math.round(Number(e.target.value))))
                       })}
                     />
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-2 mt-2">
+                  <div>
+                    <label className="text-[10px] text-slate-400 block mb-1">
+                      Старт через
+                      <span className="ml-1 text-slate-300">
+                        {typeof phase.startAfterDays === 'number'
+                          ? `= ${formatOffsetDays(phase.startAfterDays)}`
+                          : '= после прошлой фазы'}
+                      </span>
+                    </label>
+                    <input
+                      type="number"
+                      min={0}
+                      max={sprintDays * HOURS_PER_DAY}
+                      step={1}
+                      placeholder="по цепочке"
+                      className="w-full border border-slate-300 rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-cyan-400"
+                      value={typeof phase.startAfterDays === 'number' ? daysToHours(phase.startAfterDays) : ''}
+                      onChange={e => {
+                        const value = e.target.value.trim();
+                        updatePhase(idx, {
+                          startAfterDays: value === ''
+                            ? undefined
+                            : hoursToDays(Math.max(0, Math.round(Number(value))))
+                        });
+                      }}
+                    />
+                  </div>
+                  <div className="rounded-lg border border-slate-200 bg-white/70 px-2 py-1.5 text-[10px] text-slate-500">
+                    Если указать значение, фаза стартует через это время после начала задачи, даже если предыдущая ещё не закончилась.
                   </div>
                 </div>
                 </div>

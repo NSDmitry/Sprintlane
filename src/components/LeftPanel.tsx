@@ -74,6 +74,7 @@ export function LeftPanel({ tasks, people, blocks, onEditTask, onDeleteTask, onN
                     <span className="text-xs font-semibold text-slate-800 truncate leading-snug">
                       {task.name}
                     </span>
+                    {task.sprintGoal && <span className="text-xs flex-shrink-0" title="Цель спринта">🔥</span>}
                   </div>
                   {/* Phase assignees */}
                   <div className="flex flex-wrap gap-1 mt-1">

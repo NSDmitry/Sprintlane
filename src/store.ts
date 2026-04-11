@@ -29,25 +29,34 @@ const defaultState: AppState = {
   tasks: [],
 };
 
+function saveState(state: AppState) {
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch {}
+}
+
 function loadState(): AppState {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) {
       const parsed = JSON.parse(raw) as AppState;
+      let didMigrate = false;
       if (!parsed.sprint.startDate) parsed.sprint.startDate = nearestMondayISO();
       if (!parsed.teams) parsed.teams = defaultState.teams;
       // migrate people without teamId
-      parsed.people = parsed.people.map(p =>
-        p.teamId ? p : { ...p, teamId: DEFAULT_TEAM_ID }
-      );
+      parsed.people = parsed.people.map(p => {
+        if (p.teamId) return p;
+        didMigrate = true;
+        return { ...p, teamId: DEFAULT_TEAM_ID };
+      });
+      parsed.tasks = (parsed.tasks ?? []).map(task => {
+        if (typeof task.sprintGoal === 'boolean') return task;
+        didMigrate = true;
+        return { ...task, sprintGoal: false };
+      });
+      if (didMigrate) saveState(parsed);
       return parsed;
     }
   } catch {}
   return defaultState;
-}
-
-function saveState(state: AppState) {
-  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch {}
 }
 
 export function useAppStore() {
