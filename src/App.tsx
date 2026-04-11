@@ -191,6 +191,7 @@ export default function App() {
           task={editingTask}
           people={state.people}
           sprintDays={sprintDays}
+          startDate={state.sprint.startDate}
           onSave={task => {
             store.updateTask(editingTask ? task : { ...task, id: generateId() });
           }}

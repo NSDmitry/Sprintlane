@@ -426,6 +426,7 @@ export function TimelineGrid({
           task={editingTask}
           people={people}
           sprintDays={sprintDays}
+          startDate={startDate}
           onSave={onUpdateTask}
           onDelete={onDeleteTask}
           onClose={() => setEditingTask(null)}

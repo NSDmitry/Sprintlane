@@ -2,12 +2,13 @@ import { useState } from 'react';
 import type { Task, Phase, Person } from '../types';
 import { Modal } from './Modal';
 import { generateId } from '../store';
-import { daysToHours, hoursToDays, formatDuration, HOURS_PER_DAY } from '../conflicts';
+import { daysToHours, hoursToDays, formatDuration, HOURS_PER_DAY, snapToWorkingDay, isWeekend } from '../conflicts';
 
 interface Props {
   task: Task | null;
   people: Person[];
   sprintDays: number;
+  startDate: string;
   onSave: (task: Task) => void;
   onDelete?: (id: string) => void;
   onClose: () => void;
@@ -19,6 +20,78 @@ type PhaseRoleKind = 'dev' | 'test' | null;
 
 function emptyPhase(label: string): Phase {
   return { id: generateId(), label, assigneeId: '', durationDays: 1 };
+}
+
+function parseISODateLocal(iso: string): Date {
+  const [year, month, day] = iso.split('-').map(Number);
+  return new Date(year, (month ?? 1) - 1, day ?? 1, 12);
+}
+
+function formatISODateLocal(date: Date): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function addDaysISO(iso: string, days: number): string {
+  const date = parseISODateLocal(iso);
+  date.setDate(date.getDate() + days);
+  return formatISODateLocal(date);
+}
+
+function diffDaysISO(fromISO: string, toISO: string): number {
+  const from = parseISODateLocal(fromISO);
+  const to = parseISODateLocal(toISO);
+  return Math.round((to.getTime() - from.getTime()) / (24 * 60 * 60 * 1000));
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
+
+function calcEndDayPosition(startDate: string, startDay: number, phases: Phase[]): number {
+  let cursor = snapToWorkingDay(startDate, startDay);
+
+  for (const phase of phases) {
+    if (phase.durationDays <= 0) continue;
+
+    cursor = snapToWorkingDay(startDate, cursor);
+    let remaining = phase.durationDays;
+
+    while (remaining > 1e-9) {
+      const dayIdx = Math.floor(cursor);
+      if (isWeekend(startDate, dayIdx)) {
+        cursor = dayIdx + 1;
+        continue;
+      }
+
+      const fracInDay = cursor - dayIdx;
+      const capacityLeft = 1 - fracInDay;
+
+      if (remaining <= capacityLeft) {
+        cursor += remaining;
+        remaining = 0;
+      } else {
+        remaining -= capacityLeft;
+        cursor = dayIdx + 1;
+      }
+    }
+  }
+
+  return cursor;
+}
+
+function dayPositionToISO(startDate: string, dayPosition: number): string {
+  const safeDayIndex = Math.max(0, Math.ceil(dayPosition) - 1);
+  return addDaysISO(startDate, safeDayIndex);
+}
+
+function formatHumanDate(iso: string): string {
+  return parseISODateLocal(iso).toLocaleDateString('ru-RU', {
+    day: 'numeric',
+    month: 'long',
+  });
 }
 
 function normalizeText(value: string): string {
@@ -71,9 +144,14 @@ function isAllowedForPhase(person: Person, phase: Phase): boolean {
   return true;
 }
 
-export function TaskEditor({ task, people, sprintDays, onSave, onDelete, onClose }: Props) {
+export function TaskEditor({ task, people, sprintDays, startDate, onSave, onDelete, onClose }: Props) {
   const [name, setName] = useState(task?.name ?? '');
-  const [startDay, setStartDay] = useState(task?.startDay ?? 0);
+  const sprintEndDate = addDaysISO(startDate, Math.max(sprintDays - 1, 0));
+  const initialStartDate = addDaysISO(
+    startDate,
+    clamp(task?.startDay ?? 0, 0, Math.max(sprintDays - 1, 0))
+  );
+  const [selectedStartDate, setSelectedStartDate] = useState(initialStartDate);
   const [phases, setPhases] = useState<Phase[]>(
     task?.phases.length ? task.phases : DEFAULT_PHASE_LABELS.map(emptyPhase)
   );
@@ -96,7 +174,10 @@ export function TaskEditor({ task, people, sprintDays, onSave, onDelete, onClose
   };
 
   const totalDuration = phases.reduce((s, p) => s + (p.durationDays || 0), 0);
+  const startDay = clamp(diffDaysISO(startDate, selectedStartDate), 0, Math.max(sprintDays - 1, 0));
   const overflow = startDay + totalDuration > sprintDays;
+  const completionDayPosition = calcEndDayPosition(startDate, startDay, phases);
+  const completionDate = dayPositionToISO(startDate, completionDayPosition);
 
   const handleSave = () => {
     const n = name.trim();
@@ -124,19 +205,32 @@ export function TaskEditor({ task, people, sprintDays, onSave, onDelete, onClose
             onChange={e => setName(e.target.value)}
             onKeyDown={e => e.key === 'Enter' && handleSave()}
           />
+          <div className="mt-2 rounded-lg bg-slate-50 border border-slate-200 px-3 py-2 text-xs text-slate-600">
+            <div>Дата начала: {formatHumanDate(selectedStartDate)}</div>
+            <div>Предполагаемая дата завершения: {formatHumanDate(completionDate)}</div>
+          </div>
         </div>
 
-        {/* Start day */}
+        {/* Start date */}
         <div>
           <label className="text-xs font-semibold text-slate-500 uppercase tracking-wide block mb-1">
-            День начала <span className="font-normal text-slate-400 normal-case">(от начала спринта)</span>
+            Дата начала <span className="font-normal text-slate-400 normal-case">(только в пределах спринта)</span>
           </label>
           <input
-            type="number" min={1} max={sprintDays}
+            type="date"
             className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-cyan-400"
-            value={startDay + 1}
-            onChange={e => setStartDay(Math.max(0, Number(e.target.value) - 1))}
+            value={selectedStartDate}
+            min={startDate}
+            max={sprintEndDate}
+            onChange={e => setSelectedStartDate(e.target.value || initialStartDate)}
           />
+          <p className="mt-1 text-xs text-slate-400">
+            День {startDay + 1} спринта · {parseISODateLocal(selectedStartDate).toLocaleDateString('ru-RU', {
+              weekday: 'long',
+              day: 'numeric',
+              month: 'long',
+            })}
+          </p>
         </div>
 
         {/* Phases */}
