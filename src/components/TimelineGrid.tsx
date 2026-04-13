@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import type { Person, Team, Task, PhaseBlock, DayLoad } from '../types';
-import { computePersonLoad, formatDuration, HOURS_PER_DAY, EXTERNAL_REVIEWER_ID, isReviewPhase } from '../conflicts';
+import { computePersonLoad, formatDuration, HOURS_PER_DAY, EXTERNAL_REVIEWER_ID } from '../conflicts';
 import { TaskEditor } from './TaskEditor';
 
 interface Props {
@@ -184,23 +184,6 @@ function isTestPhase(label: string): boolean {
   );
 }
 
-interface TaskHoursBreakdown {
-  devHours: number;
-  reviewHours: number;
-  testHours: number;
-  totalHours: number;
-}
-
-function computeTaskHoursBreakdown(task: Task): TaskHoursBreakdown {
-  let devHours = 0, reviewHours = 0, testHours = 0;
-  for (const phase of task.phases) {
-    const h = Math.round(phase.durationDays * HOURS_PER_DAY);
-    if (isTestPhase(phase.label)) testHours += h;
-    else if (isReviewPhase(phase.label)) reviewHours += h;
-    else devHours += h;
-  }
-  return { devHours, reviewHours, testHours, totalHours: devHours + reviewHours + testHours };
-}
 
 function getBlockHoursForDay(block: PhaseBlock, day: number): number {
   const overlapStart = Math.max(block.startDay, day);
@@ -613,7 +596,8 @@ export function TimelineGrid({
                 )}
                 {(() => {
                   const task = getTask(block.taskId);
-                  const hours: TaskHoursBreakdown | null = task ? computeTaskHoursBreakdown(task) : null;
+                  const phase = task?.phases.find(p => p.id === block.phaseId);
+                  const phaseHours = phase ? Math.round(phase.durationDays * HOURS_PER_DAY) : 0;
                   const blockDuration = block.endDay - block.startDay;
                   const isMultiDay = blockDuration > 1;
                   const textColor = isExt ? '#64748b' : isConflict ? '#b91c1c' : block.taskColor;
@@ -629,12 +613,12 @@ export function TimelineGrid({
                             {block.taskName}
                             {block.taskIsSprintGoal ? ' 🔥' : ''}
                           </span>
-                          {hours && width >= 44 && (
+                          {phaseHours > 0 && width >= 44 && (
                             <span
                               className="flex-shrink-0 text-[9px] font-normal leading-none rounded px-0.5"
                               style={{ color: textColor, opacity: 0.65, background: `${block.taskColor}18` }}
                             >
-                              {hours.totalHours}ч
+                              {phaseHours}ч
                             </span>
                           )}
                         </div>
@@ -878,7 +862,8 @@ export function TimelineGrid({
                       const blockDuration = block.endDay - block.startDay;
                       const isMultiDay = blockDuration > 1;
                       const task = getTask(block.taskId);
-                      const hours: TaskHoursBreakdown | null = task ? computeTaskHoursBreakdown(task) : null;
+                      const phase = task?.phases.find(p => p.id === block.phaseId);
+                      const phaseHours = phase ? Math.round(phase.durationDays * HOURS_PER_DAY) : 0;
 
                       return (
                         <div
@@ -943,12 +928,12 @@ export function TimelineGrid({
                                 {block.taskName}
                                 {block.taskIsSprintGoal ? ' 🔥' : ''}
                               </span>
-                              {hours && width >= 44 && (
+                              {phaseHours > 0 && width >= 44 && (
                                 <span
                                   className="flex-shrink-0 text-[9px] font-normal leading-none rounded px-0.5"
                                   style={{ color: block.taskColor, opacity: 0.65, background: `${block.taskColor}18` }}
                                 >
-                                  {hours.reviewHours > 0 ? `${hours.reviewHours}ч` : `${hours.totalHours}ч`}
+                                  {phaseHours}ч
                                 </span>
                               )}
                             </div>
