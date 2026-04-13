@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import type { Person, Team, Task, PhaseBlock, DayLoad } from '../types';
-import { computePersonLoad, formatDuration, HOURS_PER_DAY } from '../conflicts';
+import { computePersonLoad, formatDuration, HOURS_PER_DAY, EXTERNAL_REVIEWER_ID, isReviewPhase } from '../conflicts';
 import { TaskEditor } from './TaskEditor';
 
 interface Props {
@@ -181,16 +181,6 @@ function isTestPhase(label: string): boolean {
     normalized === 'qa' ||
     normalized.includes('тест') ||
     normalized.includes('qa')
-  );
-}
-
-function isReviewPhase(label: string): boolean {
-  const normalized = normalizeText(label);
-  return (
-    normalized === 'review' ||
-    normalized === 'ревью' ||
-    normalized.includes('review') ||
-    normalized.includes('ревью')
   );
 }
 
@@ -830,6 +820,170 @@ export function TimelineGrid({
                 Добавьте участников через кнопку «Команда»
               </div>
             )}
+
+            {/* External reviewers row */}
+            {(() => {
+              const reviewBlocks = blocks.filter(b => b.assigneeId === EXTERNAL_REVIEWER_ID);
+              if (reviewBlocks.length === 0) return null;
+              const laneLayout = buildBlockLaneLayout(reviewBlocks);
+              const rowHeight = Math.max(
+                ROW_HEIGHT,
+                BLOCK_TOP + laneLayout.laneCount * BLOCK_HEIGHT + (laneLayout.laneCount - 1) * BLOCK_GAP + BLOCK_BOTTOM
+              );
+              return (
+                <div className="flex border-t-2 border-slate-300 bg-slate-50/60" style={{ height: rowHeight }}>
+                  {/* Label */}
+                  <div
+                    className="flex-shrink-0 flex items-center gap-2.5 px-4 border-r border-slate-200"
+                    style={{ width: LABEL_WIDTH }}
+                  >
+                    <div className="w-8 h-8 rounded-full flex items-center justify-center bg-slate-300 text-slate-600 text-sm flex-shrink-0">
+                      👥
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-xs font-semibold text-slate-600 truncate">Внешние ревьюеры</div>
+                      <div className="text-[10px] text-slate-400 truncate">Code Review</div>
+                    </div>
+                  </div>
+
+                  {/* Timeline area */}
+                  <div className="relative flex-1 overflow-hidden">
+                    {/* Grid columns */}
+                    {Array.from({ length: sprintDays }, (_, i) => {
+                      const { isWeekend: wk, isToday } = getDayMeta(startDate, i);
+                      return (
+                        <div
+                          key={i}
+                          className={`absolute inset-y-0 border-r ${
+                            wk ? 'bg-red-50/70 border-red-100'
+                            : isToday ? 'bg-cyan-50/40 border-cyan-100'
+                            : 'border-slate-100'
+                          }`}
+                          style={{ left: i * dayWidth, width: dayWidth }}
+                        />
+                      );
+                    })}
+
+                    {/* Review blocks */}
+                    {reviewBlocks.map(block => {
+                      const isDraggingThis = drag?.phaseId === block.phaseId;
+                      const dragOffset = isDraggingThis ? drag!.deltaDays * dayWidth : 0;
+                      const { visualStartDay, visualEndDay } = getVisualBlockBounds(block);
+                      const left = visualStartDay * dayWidth + dragOffset;
+                      const width = (visualEndDay - visualStartDay) * dayWidth;
+                      const lane = laneLayout.laneByPhaseId.get(block.phaseId) ?? 0;
+                      const top = BLOCK_TOP + lane * (BLOCK_HEIGHT + BLOCK_GAP);
+                      const isSelectedTask = selectedTaskId === block.taskId;
+                      const isDimmed = selectedTaskId !== null && !isSelectedTask;
+                      const blockDuration = block.endDay - block.startDay;
+                      const isMultiDay = blockDuration > 1;
+                      const task = getTask(block.taskId);
+                      const hours: TaskHoursBreakdown | null = task ? computeTaskHoursBreakdown(task) : null;
+
+                      return (
+                        <div
+                          key={block.phaseId}
+                          className={`absolute select-none rounded-md
+                            ${isDraggingThis
+                              ? 'shadow-lg ring-2 ring-cyan-400 z-10 opacity-90'
+                              : isSelectedTask
+                                ? 'ring-2 ring-sky-400 z-10'
+                              : 'hover:brightness-90 cursor-grab'
+                            }`}
+                          data-task-block="true"
+                          style={{
+                            top,
+                            height: BLOCK_HEIGHT,
+                            left: left + 1,
+                            width: Math.max(width - 2, 6),
+                            background: `${block.taskColor}20`,
+                            border: 'none',
+                            borderLeft: `3px solid ${block.taskColor}`,
+                            cursor: isDraggingThis ? 'grabbing' : 'grab',
+                            opacity: isDimmed ? 0.14 : 1,
+                            transition: isDraggingThis ? 'none' : undefined,
+                            userSelect: 'none',
+                            zIndex: isSelectedTask ? 15 : 5,
+                          }}
+                          onMouseDown={e => {
+                            if (e.button !== 0) return;
+                            e.preventDefault();
+                            if (!task) return;
+                            setTooltip(null);
+                            setDrag({
+                              mode: 'phase',
+                              taskId: block.taskId,
+                              phaseId: block.phaseId,
+                              originalStartDay: block.startDay,
+                              minStartDay: task.startDay,
+                              mouseStartX: e.clientX,
+                              deltaDays: 0,
+                            });
+                          }}
+                          onMouseUp={() => {
+                            if (drag && drag.deltaDays === 0) setSelectedTaskId(block.taskId);
+                          }}
+                          onContextMenu={e => {
+                            e.preventDefault();
+                            if (task) setEditingTask(task);
+                          }}
+                          onMouseEnter={e => {
+                            if (drag) return;
+                            const rect = e.currentTarget.getBoundingClientRect();
+                            setTooltip({ x: rect.left, y: rect.bottom + 8, block, personName: 'Внешние ревьюеры' });
+                          }}
+                          onMouseLeave={() => setTooltip(null)}
+                        >
+                          <div className="px-1.5 h-full flex flex-col justify-center overflow-hidden pr-2">
+                            <div
+                              className="text-[11px] font-semibold truncate leading-tight flex items-baseline gap-1"
+                              style={{ color: block.taskColor }}
+                            >
+                              <span className="truncate">
+                                {block.taskName}
+                                {block.taskIsSprintGoal ? ' 🔥' : ''}
+                              </span>
+                              {hours && width >= 44 && (
+                                <span
+                                  className="flex-shrink-0 text-[9px] font-normal leading-none rounded px-0.5"
+                                  style={{ color: block.taskColor, opacity: 0.65, background: `${block.taskColor}18` }}
+                                >
+                                  {hours.reviewHours > 0 ? `${hours.reviewHours}ч` : `${hours.totalHours}ч`}
+                                </span>
+                              )}
+                            </div>
+                            {width >= 64 && (
+                              <div className="text-[10px] truncate leading-tight text-slate-400">
+                                {block.phaseLabel}
+                              </div>
+                            )}
+                          </div>
+                          {isMultiDay && Array.from({ length: visualEndDay - visualStartDay }, (_, i) => {
+                            const day = visualStartDay + i;
+                            const dayHours = getBlockHoursForDay(block, day);
+                            if (dayHours === 0) return null;
+                            return (
+                              <div
+                                key={day}
+                                className="absolute bottom-1 pointer-events-none flex items-center justify-center"
+                                style={{ left: i * dayWidth + 2, width: dayWidth - 4 }}
+                              >
+                                <span
+                                  className="text-[8px] font-semibold leading-none px-0.5 py-px rounded"
+                                  style={{ color: block.taskColor, background: `${block.taskColor}20`, opacity: 0.9 }}
+                                >
+                                  {dayHours}ч
+                                </span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })()}
           </div>
         </div>
       </div>

@@ -1,6 +1,22 @@
 import type { Task, PhaseBlock, DayLoad } from './types';
 
 export const HOURS_PER_DAY = 8;
+export const EXTERNAL_REVIEWER_ID = '__external_reviewers__';
+
+function normalizeText(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+export function isReviewPhase(label: string): boolean {
+  const n = normalizeText(label);
+  return (
+    n === 'review' ||
+    n === 'ревью' ||
+    n === 'code review' ||
+    n.includes('review') ||
+    n.includes('ревью')
+  );
+}
 
 function isWeekend(startDate: string, dayIndex: number): boolean {
   const date = new Date(startDate);
@@ -103,8 +119,17 @@ export function computePhaseBlocks(tasks: Task[], startDate: string): PhaseBlock
       const phaseStart = scheduled.startDay;
       const phaseEnd = scheduled.endDay;
 
-      const hasAssignee = !!phase.assigneeId;
-      const displayAssigneeId = hasAssignee ? phase.assigneeId : lastAssigneeId;
+      const isReview = isReviewPhase(phase.label);
+      const hasAssignee = !!phase.assigneeId && !isReview;
+
+      let displayAssigneeId: string;
+      if (isReview) {
+        displayAssigneeId = EXTERNAL_REVIEWER_ID;
+      } else if (hasAssignee) {
+        displayAssigneeId = phase.assigneeId;
+      } else {
+        displayAssigneeId = lastAssigneeId;
+      }
 
       if (displayAssigneeId) {
         blocks.push({
@@ -117,7 +142,7 @@ export function computePhaseBlocks(tasks: Task[], startDate: string): PhaseBlock
           assigneeId: displayAssigneeId,
           startDay: phaseStart,
           endDay: phaseEnd,
-          isExternal: !hasAssignee,
+          isExternal: isReview || !hasAssignee,
         });
       }
 

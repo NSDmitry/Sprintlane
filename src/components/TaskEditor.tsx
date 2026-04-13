@@ -2,7 +2,7 @@ import { useState } from 'react';
 import type { Task, Phase, Person } from '../types';
 import { Modal } from './Modal';
 import { generateId } from '../store';
-import { daysToHours, hoursToDays, formatDuration, HOURS_PER_DAY, computeTaskPhaseSchedule } from '../conflicts';
+import { daysToHours, hoursToDays, formatDuration, HOURS_PER_DAY, computeTaskPhaseSchedule, isReviewPhase } from '../conflicts';
 
 interface Props {
   task: Task | null;
@@ -97,10 +97,6 @@ function isAllowedForPhase(person: Person, phase: Phase): boolean {
   if (!phaseRoleKind) return true;
 
   const role = normalizeText(person.role);
-
-  if (phaseRoleKind === 'dev') {
-    return role.includes('разработ') || role.includes('developer') || role.includes('dev');
-  }
 
   if (phaseRoleKind === 'test') {
     return (
@@ -269,6 +265,7 @@ export function TaskEditor({
           <div className="flex flex-col gap-2">
             {phases.map((phase, idx) => {
               const phaseRoleKind = getPhaseRoleKind(phase.label);
+              const isReview = isReviewPhase(phase.label);
               const filteredPeople = people.filter(person => isAllowedForPhase(person, phase));
               const selectedPerson = people.find(person => person.id === phase.assigneeId);
               const selectedPersonAllowed =
@@ -286,38 +283,45 @@ export function TaskEditor({
                   <input
                     className="flex-1 border border-slate-300 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-cyan-400"
                     value={phase.label}
-                    onChange={e => updatePhase(idx, { label: e.target.value })}
+                    onChange={e => {
+                      const newLabel = e.target.value;
+                      updatePhase(idx, {
+                        label: newLabel,
+                        assigneeId: isReviewPhase(newLabel) ? '' : phase.assigneeId,
+                      });
+                    }}
                   />
                   <button onClick={() => removePhase(idx)} className="text-red-300 hover:text-red-500 font-bold text-lg leading-none">×</button>
                 </div>
                 <div className="grid grid-cols-2 gap-2">
                   <div>
-                    <label className="text-[10px] text-slate-400 block mb-1">
-                      Исполнитель
-                      {!phase.assigneeId && (
-                        <span className="ml-1 text-slate-300">(внешний)</span>
-                      )}
-                    </label>
-                    <select
-                      className="w-full border border-slate-300 rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-cyan-400"
-                      value={phase.assigneeId}
-                      onChange={e => updatePhase(idx, { assigneeId: e.target.value })}
-                    >
-                      <option value="">— внешний / без исполнителя —</option>
-                      {!selectedPersonAllowed && selectedPerson && (
-                        <option value={selectedPerson.id}>
-                          {selectedPerson.name} ({selectedPerson.role}) — недоступно для этой фазы
-                        </option>
-                      )}
-                      {filteredPeople.map(p => (
-                        <option key={p.id} value={p.id}>{p.name} ({p.role})</option>
-                      ))}
-                    </select>
-                    {phaseRoleKind === 'dev' && (
-                      <div className="mt-1 text-[10px] text-slate-400">Для фазы Dev доступны только разработчики.</div>
-                    )}
-                    {phaseRoleKind === 'test' && (
-                      <div className="mt-1 text-[10px] text-slate-400">Для фазы Test доступны только тестировщики.</div>
+                    <label className="text-[10px] text-slate-400 block mb-1">Исполнитель</label>
+                    {isReview ? (
+                      <div className="w-full border border-slate-200 rounded-lg px-2 py-1.5 text-xs bg-white text-slate-500 flex items-center gap-1.5">
+                        <span>👥</span>
+                        <span className="font-medium">Внешние ревьюеры</span>
+                      </div>
+                    ) : (
+                      <>
+                        <select
+                          className="w-full border border-slate-300 rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-cyan-400"
+                          value={phase.assigneeId}
+                          onChange={e => updatePhase(idx, { assigneeId: e.target.value })}
+                        >
+                          <option value="">— без исполнителя —</option>
+                          {!selectedPersonAllowed && selectedPerson && (
+                            <option value={selectedPerson.id}>
+                              {selectedPerson.name} ({selectedPerson.role}) — недоступно для этой фазы
+                            </option>
+                          )}
+                          {filteredPeople.map(p => (
+                            <option key={p.id} value={p.id}>{p.name} ({p.role})</option>
+                          ))}
+                        </select>
+                        {phaseRoleKind === 'test' && (
+                          <div className="mt-1 text-[10px] text-slate-400">Для фазы Test доступны только тестировщики.</div>
+                        )}
+                      </>
                     )}
                   </div>
                   <div>
