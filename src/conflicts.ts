@@ -125,7 +125,7 @@ export function computePhaseBlocks(tasks: Task[], startDate: string): PhaseBlock
     }
   });
 
-  // Conflict detection — only non-external blocks
+  // Conflict detection — only when total daily load exceeds 1 working day (8h)
   const conflictPhaseIds = new Set<string>();
   const byAssignee = new Map<string, typeof blocks>();
   for (const b of blocks) {
@@ -134,11 +134,21 @@ export function computePhaseBlocks(tasks: Task[], startDate: string): PhaseBlock
     byAssignee.get(b.assigneeId)!.push(b);
   }
   for (const [, ab] of byAssignee) {
-    for (let i = 0; i < ab.length; i++) {
-      for (let j = i + 1; j < ab.length; j++) {
-        const a = ab[i], b = ab[j];
-        if (a.startDay < b.endDay && b.startDay < a.endDay) {
-          conflictPhaseIds.add(a.phaseId);
+    const maxDay = Math.max(...ab.map(b => Math.ceil(b.endDay)));
+    for (let day = 0; day < maxDay; day++) {
+      let totalLoad = 0;
+      const contributing: typeof ab = [];
+      for (const b of ab) {
+        const overlapStart = Math.max(b.startDay, day);
+        const overlapEnd = Math.min(b.endDay, day + 1);
+        const overlap = Math.max(0, overlapEnd - overlapStart);
+        if (overlap > 0) {
+          totalLoad += overlap;
+          contributing.push(b);
+        }
+      }
+      if (totalLoad > 1 + 1e-9) {
+        for (const b of contributing) {
           conflictPhaseIds.add(b.phaseId);
         }
       }

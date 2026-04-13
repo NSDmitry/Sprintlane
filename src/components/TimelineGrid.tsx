@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import type { Person, Team, Task, PhaseBlock, DayLoad } from '../types';
-import { computePersonLoad, formatDuration } from '../conflicts';
+import { computePersonLoad, formatDuration, HOURS_PER_DAY } from '../conflicts';
 import { TaskEditor } from './TaskEditor';
 
 interface Props {
@@ -154,12 +154,15 @@ function getConflictDays(personBlocks: PhaseBlock[], totalDays: number): Set<num
   const days = new Set<number>();
 
   for (let day = 0; day < totalDays; day++) {
-    const overlappingCount = personBlocks.filter(block => {
-      if (block.isExternal) return false;
-      return block.startDay < day + 1 && day < block.endDay;
-    }).length;
-
-    if (overlappingCount > 1) {
+    let totalLoad = 0;
+    for (const block of personBlocks) {
+      if (block.isExternal) continue;
+      const overlapStart = Math.max(block.startDay, day);
+      const overlapEnd = Math.min(block.endDay, day + 1);
+      const overlap = Math.max(0, overlapEnd - overlapStart);
+      totalLoad += overlap;
+    }
+    if (totalLoad > 1 + 1e-9) {
       days.add(day);
     }
   }
@@ -179,6 +182,41 @@ function isTestPhase(label: string): boolean {
     normalized.includes('тест') ||
     normalized.includes('qa')
   );
+}
+
+function isReviewPhase(label: string): boolean {
+  const normalized = normalizeText(label);
+  return (
+    normalized === 'review' ||
+    normalized === 'ревью' ||
+    normalized.includes('review') ||
+    normalized.includes('ревью')
+  );
+}
+
+interface TaskHoursBreakdown {
+  devHours: number;
+  reviewHours: number;
+  testHours: number;
+  totalHours: number;
+}
+
+function computeTaskHoursBreakdown(task: Task): TaskHoursBreakdown {
+  let devHours = 0, reviewHours = 0, testHours = 0;
+  for (const phase of task.phases) {
+    const h = Math.round(phase.durationDays * HOURS_PER_DAY);
+    if (isTestPhase(phase.label)) testHours += h;
+    else if (isReviewPhase(phase.label)) reviewHours += h;
+    else devHours += h;
+  }
+  return { devHours, reviewHours, testHours, totalHours: devHours + reviewHours + testHours };
+}
+
+function getBlockHoursForDay(block: PhaseBlock, day: number): number {
+  const overlapStart = Math.max(block.startDay, day);
+  const overlapEnd = Math.min(block.endDay, day + 1);
+  const overlapDays = Math.max(0, overlapEnd - overlapStart);
+  return Math.round(overlapDays * HOURS_PER_DAY);
 }
 
 function getRoleSortPriority(role: string): number {
@@ -583,20 +621,70 @@ export function TimelineGrid({
                     !
                   </div>
                 )}
-                <div className="px-1.5 h-full flex flex-col justify-center overflow-hidden pr-5">
-                  <div
-                    className="text-[11px] font-semibold truncate leading-tight"
-                    style={{ color: isExt ? '#64748b' : isConflict ? '#b91c1c' : block.taskColor }}
-                  >
-                    {block.taskName}
-                    {block.taskIsSprintGoal ? ' 🔥' : ''}
-                  </div>
-                  {width >= 64 && (
-                    <div className={`text-[10px] truncate leading-tight ${isExt ? 'text-slate-400' : isConflict ? 'text-red-400' : 'text-slate-400'}`}>
-                      {block.phaseLabel}
-                    </div>
-                  )}
-                </div>
+                {(() => {
+                  const task = getTask(block.taskId);
+                  const hours: TaskHoursBreakdown | null = task ? computeTaskHoursBreakdown(task) : null;
+                  const blockDuration = block.endDay - block.startDay;
+                  const isMultiDay = blockDuration > 1;
+                  const textColor = isExt ? '#64748b' : isConflict ? '#b91c1c' : block.taskColor;
+
+                  return (
+                    <>
+                      <div className="px-1.5 h-full flex flex-col justify-center overflow-hidden pr-5">
+                        <div
+                          className="text-[11px] font-semibold truncate leading-tight flex items-baseline gap-1"
+                          style={{ color: textColor }}
+                        >
+                          <span className="truncate">
+                            {block.taskName}
+                            {block.taskIsSprintGoal ? ' 🔥' : ''}
+                          </span>
+                          {hours && width >= 44 && (
+                            <span
+                              className="flex-shrink-0 text-[9px] font-normal leading-none rounded px-0.5"
+                              style={{ color: textColor, opacity: 0.65, background: `${block.taskColor}18` }}
+                            >
+                              {hours.totalHours}ч
+                            </span>
+                          )}
+                        </div>
+                        {width >= 64 && (
+                          <div className={`text-[10px] truncate leading-tight ${isExt ? 'text-slate-400' : isConflict ? 'text-red-400' : 'text-slate-400'}`}>
+                            {block.phaseLabel}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Per-day hour labels for multi-day blocks */}
+                      {isMultiDay && Array.from({ length: visualEndDay - visualStartDay }, (_, i) => {
+                        const day = visualStartDay + i;
+                        const dayHours = getBlockHoursForDay(block, day);
+                        if (dayHours === 0) return null;
+                        return (
+                          <div
+                            key={day}
+                            className="absolute bottom-1 pointer-events-none flex items-center justify-center"
+                            style={{
+                              left: i * dayWidth + 2,
+                              width: dayWidth - 4,
+                            }}
+                          >
+                            <span
+                              className="text-[8px] font-semibold leading-none px-0.5 py-px rounded"
+                              style={{
+                                color: isExt ? '#64748b' : isConflict ? '#b91c1c' : block.taskColor,
+                                background: isExt ? '#e2e8f0' : `${block.taskColor}20`,
+                                opacity: 0.9,
+                              }}
+                            >
+                              {dayHours}ч
+                            </span>
+                          </div>
+                        );
+                      })}
+                    </>
+                  );
+                })()}
                 {isConflict && (
                   <div
                     className="absolute left-2 right-2 pointer-events-none"

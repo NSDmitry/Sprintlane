@@ -16,7 +16,9 @@
       "WebFetch(domain:marketplace.atlassian.com)",
       "WebFetch(domain:activitytimeline.atlassian.net)",
       "WebFetch(domain:localhost)",
-      "Bash(curl -s http://localhost:5174)"
+      "Bash(curl -s http://localhost:5174)",
+      "Bash(node_modules/.bin/tsc --noEmit)",
+      "Bash(./node_modules/.bin/tsc:*)"
     ]
   }
 }
