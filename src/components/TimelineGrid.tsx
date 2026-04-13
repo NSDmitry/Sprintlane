@@ -1,10 +1,9 @@
 import { useState, useEffect, useRef } from 'react';
-import type { Person, Team, Task, PhaseBlock, DayLoad } from '../types';
+import type { Person, Task, PhaseBlock, DayLoad } from '../types';
 import { computePersonLoad, formatDuration, HOURS_PER_DAY, EXTERNAL_REVIEWER_ID } from '../conflicts';
 import { TaskEditor } from './TaskEditor';
 
 interface Props {
-  teams: Team[];
   people: Person[];
   tasks: Task[];
   blocks: PhaseBlock[];
@@ -12,7 +11,6 @@ interface Props {
   startDate: string;
   onUpdateTask: (task: Task) => void;
   onDeleteTask: (id: string) => void;
-  onToggleTeam: (id: string) => void;
   onCreateTaskAtDay: (day: number, personId: string) => void;
 }
 
@@ -24,7 +22,6 @@ const BLOCK_TOP = 6;
 const BLOCK_HEIGHT = 36;
 const BLOCK_GAP = 6;
 const BLOCK_BOTTOM = 10;
-const TEAM_HEADER_HEIGHT = 36;
 
 const DAY_NAMES = ['вс', 'пн', 'вт', 'ср', 'чт', 'пт', 'сб'];
 
@@ -224,8 +221,8 @@ function sortPeopleForTimeline(items: Person[]): Person[] {
 }
 
 export function TimelineGrid({
-  teams, people, tasks, blocks, sprintDays, startDate,
-  onUpdateTask, onDeleteTask, onToggleTeam, onCreateTaskAtDay,
+  people, tasks, blocks, sprintDays, startDate,
+  onUpdateTask, onDeleteTask, onCreateTaskAtDay,
 }: Props) {
   const [editingTask, setEditingTask] = useState<Task | null>(null);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
@@ -307,11 +304,7 @@ export function TimelineGrid({
   const getTask = (id: string) => tasks.find(t => t.id === id);
   const getPerson = (id: string) => people.find(p => p.id === id);
 
-  const teamRows = teams.map(team => ({
-    team,
-    members: sortPeopleForTimeline(people.filter(p => p.teamId === team.id)),
-  }));
-  const orphans = sortPeopleForTimeline(people.filter(p => !teams.find(t => t.id === p.teamId)));
+  const sortedPeople = sortPeopleForTimeline(people);
 
   const rowDataByPersonId = new Map<string, PersonRowData>(
     people.map(person => {
@@ -342,20 +335,8 @@ export function TimelineGrid({
   const positionedRows: PositionedPersonRow[] = [];
   let bodyHeight = 0;
 
-  for (const { team, members } of teamRows) {
-    bodyHeight += TEAM_HEADER_HEIGHT;
-    if (team.collapsed) continue;
-
-    for (const member of members) {
-      const rowData = rowDataByPersonId.get(member.id);
-      if (!rowData) continue;
-      positionedRows.push({ ...rowData, top: bodyHeight });
-      bodyHeight += rowData.rowHeight;
-    }
-  }
-
-  for (const orphan of orphans) {
-    const rowData = rowDataByPersonId.get(orphan.id);
+  for (const person of sortedPeople) {
+    const rowData = rowDataByPersonId.get(person.id);
     if (!rowData) continue;
     positionedRows.push({ ...rowData, top: bodyHeight });
     bodyHeight += rowData.rowHeight;
@@ -773,30 +754,8 @@ export function TimelineGrid({
               </svg>
             )}
 
-            {/* Team groups */}
-            {teamRows.map(({ team, members }) => (
-              <div key={team.id}>
-                {/* Team header */}
-                <div
-                  className="flex items-center gap-2 px-4 py-2 bg-slate-50 border-b border-slate-200 cursor-pointer hover:bg-slate-100 transition-colors"
-                  style={{ height: TEAM_HEADER_HEIGHT }}
-                  onClick={() => onToggleTeam(team.id)}
-                >
-                  <svg
-                    className={`w-3 h-3 text-slate-400 transition-transform flex-shrink-0 ${team.collapsed ? '' : 'rotate-90'}`}
-                    fill="currentColor" viewBox="0 0 20 20"
-                  >
-                    <path fillRule="evenodd" d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z" clipRule="evenodd" />
-                  </svg>
-                  <span className="text-[11px] font-bold text-slate-500 uppercase tracking-widest">{team.name}</span>
-                  <span className="text-[10px] text-slate-400">({members.length})</span>
-                </div>
-                {!team.collapsed && members.map(renderPersonRow)}
-              </div>
-            ))}
-
-            {/* Orphan people */}
-            {orphans.map(renderPersonRow)}
+            {/* People rows */}
+            {sortedPeople.map(renderPersonRow)}
 
             {/* Empty state */}
             {people.length === 0 && (

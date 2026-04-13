@@ -1,5 +1,5 @@
 import { useState, useCallback } from 'react';
-import type { AppState, Person, Task, Phase, Sprint, Team } from './types';
+import type { AppState, Person, Task, Phase, Sprint } from './types';
 
 const STORAGE_KEY = 'sprint-planner-v2';
 
@@ -20,11 +20,8 @@ function nearestMondayISO(): string {
   return date.toISOString().slice(0, 10);
 }
 
-const DEFAULT_TEAM_ID = 'team-default';
-
 const defaultState: AppState = {
   sprint: { name: 'Sprint 1', totalDays: 14, startDate: nearestMondayISO() },
-  teams: [{ id: DEFAULT_TEAM_ID, name: 'Команда', collapsed: false }],
   people: [],
   tasks: [],
 };
@@ -37,15 +34,15 @@ function loadState(): AppState {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) {
-      const parsed = JSON.parse(raw) as AppState;
+      const parsed = JSON.parse(raw) as AppState & { teams?: unknown };
       let didMigrate = false;
-      if (!parsed.sprint.startDate) parsed.sprint.startDate = nearestMondayISO();
-      if (!parsed.teams) parsed.teams = defaultState.teams;
-      // migrate people without teamId
-      parsed.people = parsed.people.map(p => {
-        if (p.teamId) return p;
-        didMigrate = true;
-        return { ...p, teamId: DEFAULT_TEAM_ID };
+      if (!parsed.sprint.startDate) { parsed.sprint.startDate = nearestMondayISO(); didMigrate = true; }
+      // drop legacy teams field
+      if (parsed.teams !== undefined) { delete parsed.teams; didMigrate = true; }
+      // strip legacy teamId from people
+      parsed.people = (parsed.people ?? []).map(p => {
+        const { teamId: _teamId, ...rest } = p as Person & { teamId?: string };
+        return rest as Person;
       });
       parsed.tasks = (parsed.tasks ?? []).map(task => {
         let t = task;
@@ -76,37 +73,12 @@ export function useAppStore() {
     update(s => ({ ...s, sprint }));
   }, [update]);
 
-  // Teams
-  const addTeam = useCallback((name: string) => {
-    const team: Team = { id: generateId(), name, collapsed: false };
-    update(s => ({ ...s, teams: [...s.teams, team] }));
-  }, [update]);
-
-  const updateTeam = useCallback((team: Team) => {
-    update(s => ({ ...s, teams: s.teams.map(t => t.id === team.id ? team : t) }));
-  }, [update]);
-
-  const deleteTeam = useCallback((id: string) => {
-    update(s => ({
-      ...s,
-      teams: s.teams.filter(t => t.id !== id),
-      people: s.people.map(p => p.teamId === id ? { ...p, teamId: DEFAULT_TEAM_ID } : p),
-    }));
-  }, [update]);
-
-  const toggleTeam = useCallback((id: string) => {
-    update(s => ({
-      ...s,
-      teams: s.teams.map(t => t.id === id ? { ...t, collapsed: !t.collapsed } : t),
-    }));
-  }, [update]);
-
   // People
-  const addPerson = useCallback((name: string, role: string, teamId: string) => {
+  const addPerson = useCallback((name: string, role: string) => {
     setState(prev => {
       const usedColors = new Set(prev.people.map(p => p.color));
       const color = PERSON_COLORS.find(c => !usedColors.has(c)) ?? PERSON_COLORS[prev.people.length % PERSON_COLORS.length];
-      const person: Person = { id: generateId(), name, role, color, teamId };
+      const person: Person = { id: generateId(), name, role, color };
       const next = { ...prev, people: [...prev.people, person] };
       saveState(next);
       return next;
@@ -158,7 +130,6 @@ export function useAppStore() {
   return {
     state,
     updateSprint,
-    addTeam, updateTeam, deleteTeam, toggleTeam,
     addPerson, updatePerson, deletePerson,
     updateTask, deleteTask, updatePhase,
   };

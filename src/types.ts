@@ -3,13 +3,6 @@ export interface Person {
   name: string;
   role: string;
   color: string;
-  teamId: string;
-}
-
-export interface Team {
-  id: string;
-  name: string;
-  collapsed: boolean;
 }
 
 export interface Phase {
@@ -39,7 +32,6 @@ export interface Sprint {
 
 export interface AppState {
   sprint: Sprint;
-  teams: Team[];
   people: Person[];
   tasks: Task[];
 }

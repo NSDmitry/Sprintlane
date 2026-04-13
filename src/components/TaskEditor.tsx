@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 import type { Task, Phase, Person } from '../types';
 import { Modal } from './Modal';
 import { generateId } from '../store';
@@ -50,6 +50,80 @@ function diffDaysISO(fromISO: string, toISO: string): number {
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
+}
+
+function formatHours(hours: number): string {
+  const d = Math.floor(hours / HOURS_PER_DAY);
+  const h = hours % HOURS_PER_DAY;
+  if (d > 0 && h > 0) return `${d}d ${h}h`;
+  if (d > 0) return `${d}d`;
+  return `${h}h`;
+}
+
+function parseHours(input: string): number | null {
+  const s = input.trim().toLowerCase();
+  if (!s) return null;
+
+  let total = 0;
+  let matched = false;
+
+  // Match patterns like "2d", "2h", "2d 3h", "2d3h"
+  const dayMatch = s.match(/(\d+(?:\.\d+)?)\s*d/);
+  const hourMatch = s.match(/(\d+(?:\.\d+)?)\s*h/);
+
+  if (dayMatch) { total += parseFloat(dayMatch[1]) * HOURS_PER_DAY; matched = true; }
+  if (hourMatch) { total += parseFloat(hourMatch[1]); matched = true; }
+
+  // Plain number — treat as hours
+  if (!matched) {
+    const n = parseFloat(s);
+    if (!isNaN(n)) { total = n; matched = true; }
+  }
+
+  if (!matched || total < 1) return null;
+  return Math.round(total);
+}
+
+function HoursInput({ hours, max, onChange }: { hours: number; max: number; onChange: (h: number) => void }) {
+  const [draft, setDraft] = useState(() => formatHours(hours));
+  const [invalid, setInvalid] = useState(false);
+  const committedHours = useRef(hours);
+
+  // Sync when external value changes (e.g. phase reorder)
+  if (committedHours.current !== hours) {
+    committedHours.current = hours;
+    setDraft(formatHours(hours));
+    setInvalid(false);
+  }
+
+  const commit = () => {
+    const parsed = parseHours(draft);
+    if (parsed === null) {
+      setInvalid(true);
+      return;
+    }
+    const clamped = clamp(parsed, 1, max);
+    committedHours.current = clamped;
+    setDraft(formatHours(clamped));
+    setInvalid(false);
+    if (clamped !== hours) onChange(clamped);
+  };
+
+  return (
+    <input
+      type="text"
+      className={`w-full border rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:ring-2 ${
+        invalid
+          ? 'border-red-400 focus:ring-red-400 bg-red-50'
+          : 'border-slate-300 focus:ring-cyan-400'
+      }`}
+      placeholder="напр. 2d 4h"
+      value={draft}
+      onChange={e => { setDraft(e.target.value); setInvalid(false); }}
+      onBlur={commit}
+      onKeyDown={e => e.key === 'Enter' && commit()}
+    />
+  );
 }
 
 function dayPositionToISO(startDate: string, dayPosition: number): string {
@@ -110,9 +184,6 @@ function isAllowedForPhase(person: Person, phase: Phase): boolean {
   return true;
 }
 
-function formatOffsetDays(days: number): string {
-  return formatDuration(days);
-}
 
 function applyInitialAssignee(phases: Phase[], people: Person[], initialAssigneeId: string | null): Phase[] {
   if (!initialAssigneeId) return phases;
@@ -157,7 +228,7 @@ export function TaskEditor({
     setPhases(prev => prev.map((p, i) => i === idx ? { ...p, ...patch } : p));
 
   const addPhase = () =>
-    setPhases(prev => [...prev, emptyPhase(`Фаза ${prev.length + 1}`)]);
+    setPhases(prev => [...prev, emptyPhase('Dev')]);
 
   const removePhase = (idx: number) =>
     setPhases(prev => prev.filter((_, i) => i !== idx));
@@ -280,8 +351,8 @@ export function TaskEditor({
                     <button onClick={() => movePhase(idx, 1)} disabled={idx === phases.length - 1}
                       className="text-slate-300 hover:text-slate-500 disabled:opacity-20 text-[10px] leading-none">▼</button>
                   </div>
-                  <input
-                    className="flex-1 border border-slate-300 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-cyan-400"
+                  <select
+                    className="flex-1 border border-slate-300 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-cyan-400 bg-white"
                     value={phase.label}
                     onChange={e => {
                       const newLabel = e.target.value;
@@ -290,7 +361,11 @@ export function TaskEditor({
                         assigneeId: isReviewPhase(newLabel) ? '' : phase.assigneeId,
                       });
                     }}
-                  />
+                  >
+                    <option value="Dev">Dev</option>
+                    <option value="Review">Review</option>
+                    <option value="Test">Test</option>
+                  </select>
                   <button onClick={() => removePhase(idx)} className="text-red-300 hover:text-red-500 font-bold text-lg leading-none">×</button>
                 </div>
                 <div className="grid grid-cols-2 gap-2">
@@ -326,52 +401,13 @@ export function TaskEditor({
                   </div>
                   <div>
                     <label className="text-[10px] text-slate-400 block mb-1">
-                      Часов
-                      <span className="ml-1 text-slate-300">= {formatDuration(phase.durationDays)}</span>
+                      Оценка
                     </label>
-                    <input
-                      type="number"
-                      min={1}
+                    <HoursInput
+                      hours={daysToHours(phase.durationDays)}
                       max={sprintDays * HOURS_PER_DAY}
-                      step={1}
-                      className="w-full border border-slate-300 rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-cyan-400"
-                      value={daysToHours(phase.durationDays)}
-                      onChange={e => updatePhase(idx, {
-                        durationDays: hoursToDays(Math.max(1, Math.round(Number(e.target.value))))
-                      })}
+                      onChange={h => updatePhase(idx, { durationDays: hoursToDays(h) })}
                     />
-                  </div>
-                </div>
-                <div className="grid grid-cols-2 gap-2 mt-2">
-                  <div>
-                    <label className="text-[10px] text-slate-400 block mb-1">
-                      Старт через
-                      <span className="ml-1 text-slate-300">
-                        {typeof phase.startAfterDays === 'number'
-                          ? `= ${formatOffsetDays(phase.startAfterDays)}`
-                          : '= после прошлой фазы'}
-                      </span>
-                    </label>
-                    <input
-                      type="number"
-                      min={0}
-                      max={sprintDays * HOURS_PER_DAY}
-                      step={1}
-                      placeholder="по цепочке"
-                      className="w-full border border-slate-300 rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-cyan-400"
-                      value={typeof phase.startAfterDays === 'number' ? daysToHours(phase.startAfterDays) : ''}
-                      onChange={e => {
-                        const value = e.target.value.trim();
-                        updatePhase(idx, {
-                          startAfterDays: value === ''
-                            ? undefined
-                            : hoursToDays(Math.max(0, Math.round(Number(value))))
-                        });
-                      }}
-                    />
-                  </div>
-                  <div className="rounded-lg border border-slate-200 bg-white/70 px-2 py-1.5 text-[10px] text-slate-500">
-                    Если указать значение, фаза стартует через это время после начала задачи, даже если предыдущая ещё не закончилась.
                   </div>
                 </div>
                 </div>

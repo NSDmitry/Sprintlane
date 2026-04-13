@@ -3,13 +3,13 @@ import { useAppStore, generateId } from './store';
 import { computePhaseBlocks } from './conflicts';
 import { TimelineGrid } from './components/TimelineGrid';
 import { LeftPanel } from './components/LeftPanel';
-import { TeamManager } from './components/TeamManager';
 import { SprintSettings } from './components/SprintSettings';
+import { PeopleManager } from './components/PeopleManager';
 import { TaskEditor } from './components/TaskEditor';
 import type { Task } from './types';
 import './index.css';
 
-type Modal = 'team' | 'sprint' | 'newtask' | null;
+type Modal = 'people' | 'sprint' | 'newtask' | null;
 
 // Sprint 1 starts April 13, 2026 (Monday); each sprint = 2 weeks
 const SPRINT_EPOCH = '2026-04-13';
@@ -95,15 +95,15 @@ export default function App() {
             </div>
           )}
 
-          {/* Team button */}
+          {/* People button */}
           <button
-            onClick={() => setModal('team')}
+            onClick={() => setModal('people')}
             className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-white border border-slate-300 text-slate-700 rounded-lg hover:border-cyan-400 hover:text-cyan-600 transition-colors"
           >
             <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z" />
             </svg>
-            Команда
+            Участники
           </button>
 
           {/* New task */}
@@ -134,29 +134,22 @@ export default function App() {
         {/* Timeline */}
         <div className="flex-1 overflow-hidden bg-white">
           <TimelineGrid
-            teams={state.teams}
             people={state.people}
             tasks={sprintTasks}
             blocks={blocks}
             sprintDays={sprintDays}
             startDate={state.sprint.startDate}
-
             onUpdateTask={store.updateTask}
             onDeleteTask={store.deleteTask}
-            onToggleTeam={store.toggleTeam}
             onCreateTaskAtDay={openNewTask}
           />
         </div>
       </div>
 
       {/* ── Modals ── */}
-      {modal === 'team' && (
-        <TeamManager
-          teams={state.teams}
+      {modal === 'people' && (
+        <PeopleManager
           people={state.people}
-          onAddTeam={store.addTeam}
-          onUpdateTeam={store.updateTeam}
-          onDeleteTeam={store.deleteTeam}
           onAddPerson={store.addPerson}
           onUpdatePerson={store.updatePerson}
           onDeletePerson={store.deletePerson}
