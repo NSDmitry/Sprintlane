@@ -1,5 +1,5 @@
 import { useState, useCallback } from 'react';
-import type { AppState, Person, Task, Phase, Sprint } from './types';
+import type { AppState, Person, Task, Phase, Sprint, SprintEvent } from './types';
 
 const STORAGE_KEY = 'sprint-planner-v2';
 
@@ -24,6 +24,7 @@ const defaultState: AppState = {
   sprint: { name: 'Sprint 1', totalDays: 14, startDate: nearestMondayISO() },
   people: [],
   tasks: [],
+  events: [],
 };
 
 function saveState(state: AppState) {
@@ -50,6 +51,7 @@ function loadState(): AppState {
         if (!t.sprintStartDate) { t = { ...t, sprintStartDate: '2026-04-13' }; didMigrate = true; }
         return t;
       });
+      if (!parsed.events) { parsed.events = []; didMigrate = true; }
       if (didMigrate) saveState(parsed);
       return parsed;
     }
@@ -127,10 +129,28 @@ export function useAppStore() {
     }));
   }, [update]);
 
+  // Events
+  const upsertEvent = useCallback((event: SprintEvent) => {
+    update(s => {
+      const exists = s.events.some(e => e.id === event.id);
+      return {
+        ...s,
+        events: exists
+          ? s.events.map(e => e.id === event.id ? event : e)
+          : [...s.events, event],
+      };
+    });
+  }, [update]);
+
+  const deleteEvent = useCallback((id: string) => {
+    update(s => ({ ...s, events: s.events.filter(e => e.id !== id) }));
+  }, [update]);
+
   return {
     state,
     updateSprint,
     addPerson, updatePerson, deletePerson,
     updateTask, deleteTask, updatePhase,
+    upsertEvent, deleteEvent,
   };
 }

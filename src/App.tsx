@@ -6,10 +6,11 @@ import { LeftPanel } from './components/LeftPanel';
 import { SprintSettings } from './components/SprintSettings';
 import { PeopleManager } from './components/PeopleManager';
 import { TaskEditor } from './components/TaskEditor';
+import { EventEditor } from './components/EventEditor';
 import type { Task } from './types';
 import './index.css';
 
-type Modal = 'people' | 'sprint' | 'newtask' | null;
+type Modal = 'people' | 'sprint' | 'newtask' | 'newevent' | null;
 
 // Sprint 1 starts April 13, 2026 (Monday); each sprint = 2 weeks
 const SPRINT_EPOCH = '2026-04-13';
@@ -31,7 +32,8 @@ export default function App() {
 
   const sprintDays = SPRINT_DAYS;
   const sprintTasks = state.tasks.filter(t => t.sprintStartDate === state.sprint.startDate);
-  const blocks = computePhaseBlocks(sprintTasks, state.sprint.startDate);
+  const sprintEvents = state.events.filter(e => e.sprintStartDate === state.sprint.startDate);
+  const blocks = computePhaseBlocks(sprintTasks, state.sprint.startDate, sprintEvents);
 
   const conflictTasks = new Set(blocks.filter(b => b.hasConflict).map(b => b.taskId));
 
@@ -106,6 +108,17 @@ export default function App() {
             Участники
           </button>
 
+          {/* New event */}
+          <button
+            onClick={() => setModal('newevent')}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-white border border-slate-300 text-slate-700 rounded-lg hover:border-cyan-400 hover:text-cyan-600 transition-colors"
+          >
+            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+            </svg>
+            Событие
+          </button>
+
           {/* New task */}
           <button
             onClick={() => openNewTask()}
@@ -137,11 +150,14 @@ export default function App() {
             people={state.people}
             tasks={sprintTasks}
             blocks={blocks}
+            events={sprintEvents}
             sprintDays={sprintDays}
             startDate={state.sprint.startDate}
             onUpdateTask={store.updateTask}
             onDeleteTask={store.deleteTask}
             onCreateTaskAtDay={openNewTask}
+            onUpsertEvent={store.upsertEvent}
+            onDeleteEvent={store.deleteEvent}
           />
         </div>
       </div>
@@ -161,6 +177,17 @@ export default function App() {
         <SprintSettings
           sprint={state.sprint}
           onSave={store.updateSprint}
+          onClose={() => setModal(null)}
+        />
+      )}
+
+      {modal === 'newevent' && (
+        <EventEditor
+          event={null}
+          people={state.people}
+          sprintDays={sprintDays}
+          startDate={state.sprint.startDate}
+          onSave={event => store.upsertEvent({ ...event, id: event.id || generateId(), sprintStartDate: state.sprint.startDate })}
           onClose={() => setModal(null)}
         />
       )}

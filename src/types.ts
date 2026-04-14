@@ -34,6 +34,7 @@ export interface AppState {
   sprint: Sprint;
   people: Person[];
   tasks: Task[];
+  events: SprintEvent[];
 }
 
 export interface PhaseBlock {
@@ -52,3 +53,22 @@ export interface PhaseBlock {
 
 // Per-person, per-day load summary
 export type DayLoad = 0 | 1 | 2; // 0=free, 1=one task, 2=overloaded
+
+export type SprintEventType = 'vacation' | 'regression' | 'smoke';
+
+export interface SprintEvent {
+  id: string;
+  type: SprintEventType;
+  personId: string;
+  startDay: number; // 0-based calendar day index from sprint start
+  durationDays: number;
+  sprintStartDate: string;
+}
+
+export interface EventBlock {
+  eventId: string;
+  type: SprintEventType;
+  personId: string;
+  startDay: number;
+  endDay: number;
+}

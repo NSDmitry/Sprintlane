@@ -1,17 +1,21 @@
 import { useState, useEffect, useRef } from 'react';
-import type { Person, Task, PhaseBlock, DayLoad } from '../types';
-import { computePersonLoad, formatDuration, HOURS_PER_DAY, EXTERNAL_REVIEWER_ID } from '../conflicts';
+import type { Person, Task, PhaseBlock, DayLoad, SprintEvent, SprintEventType, EventBlock } from '../types';
+import { computePersonLoad, computeEventBlocks, formatDuration, HOURS_PER_DAY, EXTERNAL_REVIEWER_ID } from '../conflicts';
 import { TaskEditor } from './TaskEditor';
+import { EventEditor } from './EventEditor';
 
 interface Props {
   people: Person[];
   tasks: Task[];
   blocks: PhaseBlock[];
+  events: SprintEvent[];
   sprintDays: number;
   startDate: string;
   onUpdateTask: (task: Task) => void;
   onDeleteTask: (id: string) => void;
   onCreateTaskAtDay: (day: number, personId: string) => void;
+  onUpsertEvent: (event: SprintEvent) => void;
+  onDeleteEvent: (id: string) => void;
 }
 
 const LABEL_WIDTH = 200;
@@ -51,6 +55,12 @@ const LOAD_BG: Record<DayLoad, string> = {
   2: '#ef4444',
 };
 
+const EVENT_STYLE: Record<SprintEventType, { bg: string; border: string; text: string; label: string }> = {
+  vacation:   { bg: '#f1f5f9', border: '#64748b', text: '#475569', label: 'Отпуск' },
+  regression: { bg: '#fff7ed', border: '#f97316', text: '#c2410c', label: 'Регресс' },
+  smoke:      { bg: '#f0fdfa', border: '#14b8a6', text: '#0f766e', label: 'Смоук'  },
+};
+
 interface Tooltip {
   x: number; y: number;
   block: PhaseBlock;
@@ -58,9 +68,10 @@ interface Tooltip {
 }
 
 interface DragState {
-  mode: 'task' | 'phase';
+  mode: 'task' | 'phase' | 'event';
   taskId: string;
   phaseId: string;
+  eventId?: string;
   originalStartDay: number;
   minStartDay: number;
   mouseStartX: number;
@@ -75,6 +86,7 @@ interface BlockLaneLayout {
 interface PersonRowData {
   person: Person;
   personBlocks: PhaseBlock[];
+  personEventBlocks: EventBlock[];
   loads: DayLoad[];
   overloaded: boolean;
   conflictCount: number;
@@ -87,7 +99,9 @@ interface PositionedPersonRow extends PersonRowData {
   top: number;
 }
 
-function buildBlockLaneLayout(blocks: PhaseBlock[]): BlockLaneLayout {
+interface LaneItem { id: string; startDay: number; endDay: number; }
+
+function buildBlockLaneLayout(blocks: LaneItem[]): BlockLaneLayout {
   const laneByPhaseId = new Map<string, number>();
   const laneEndDays: number[] = [];
   const laneOccupiedDays: Array<Set<number>> = [];
@@ -95,7 +109,7 @@ function buildBlockLaneLayout(blocks: PhaseBlock[]): BlockLaneLayout {
   const sortedBlocks = [...blocks].sort((a, b) => {
     if (a.startDay !== b.startDay) return a.startDay - b.startDay;
     if (a.endDay !== b.endDay) return a.endDay - b.endDay;
-    return a.phaseId.localeCompare(b.phaseId);
+    return a.id.localeCompare(b.id);
   });
 
   for (const block of sortedBlocks) {
@@ -128,7 +142,7 @@ function buildBlockLaneLayout(blocks: PhaseBlock[]): BlockLaneLayout {
       occupiedDays.add(day);
     }
 
-    laneByPhaseId.set(block.phaseId, lane);
+    laneByPhaseId.set(block.id, lane);
   }
 
   return {
@@ -221,11 +235,17 @@ function sortPeopleForTimeline(items: Person[]): Person[] {
 }
 
 export function TimelineGrid({
-  people, tasks, blocks, sprintDays, startDate,
+  people, tasks, blocks, events, sprintDays, startDate,
   onUpdateTask, onDeleteTask, onCreateTaskAtDay,
+  onUpsertEvent, onDeleteEvent,
 }: Props) {
   const [editingTask, setEditingTask] = useState<Task | null>(null);
+  const [editingEvent, setEditingEvent] = useState<SprintEvent | null>(null);
+  const [newEventDay, setNewEventDay] = useState<number | null>(null);
+  const [newEventPersonId, setNewEventPersonId] = useState<string | null>(null);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+
+  const eventBlocks: EventBlock[] = computeEventBlocks(events, startDate);
   const [tooltip, setTooltip] = useState<Tooltip | null>(null);
   const [drag, setDrag] = useState<DragState | null>(null);
   const [containerWidth, setContainerWidth] = useState(0);
@@ -266,24 +286,34 @@ export function TimelineGrid({
     const onMouseUp = () => {
       const d = dragRef.current;
       if (!d) return;
-      const task = tasks.find(t => t.id === d.taskId);
-      if (task) {
-        const newStartDay = Math.max(d.minStartDay, d.originalStartDay + d.deltaDays);
-        if (d.mode === 'phase') {
-          const phase = task.phases.find(item => item.id === d.phaseId);
-          const nextStartAfterDays = Math.max(0, newStartDay - task.startDay);
-          if (phase && phase.startAfterDays !== nextStartAfterDays) {
-            onUpdateTask({
-              ...task,
-              phases: task.phases.map(item =>
-                item.id === d.phaseId
-                  ? { ...item, startAfterDays: nextStartAfterDays }
-                  : item
-              ),
-            });
+      if (d.mode === 'event' && d.eventId) {
+        const ev = events.find(e => e.id === d.eventId);
+        if (ev) {
+          const newStartDay = Math.max(0, d.originalStartDay + d.deltaDays);
+          if (newStartDay !== ev.startDay) {
+            onUpsertEvent({ ...ev, startDay: newStartDay });
           }
-        } else if (newStartDay !== task.startDay) {
-          onUpdateTask({ ...task, startDay: newStartDay });
+        }
+      } else {
+        const task = tasks.find(t => t.id === d.taskId);
+        if (task) {
+          const newStartDay = Math.max(d.minStartDay, d.originalStartDay + d.deltaDays);
+          if (d.mode === 'phase') {
+            const phase = task.phases.find(item => item.id === d.phaseId);
+            const nextStartAfterDays = Math.max(0, newStartDay - task.startDay);
+            if (phase && phase.startAfterDays !== nextStartAfterDays) {
+              onUpdateTask({
+                ...task,
+                phases: task.phases.map(item =>
+                  item.id === d.phaseId
+                    ? { ...item, startAfterDays: nextStartAfterDays }
+                    : item
+                ),
+              });
+            }
+          } else if (newStartDay !== task.startDay) {
+            onUpdateTask({ ...task, startDay: newStartDay });
+          }
         }
       }
       setDrag(null);
@@ -309,10 +339,20 @@ export function TimelineGrid({
   const rowDataByPersonId = new Map<string, PersonRowData>(
     people.map(person => {
       const personBlocks = blocks.filter(b => b.assigneeId === person.id);
-      const loads: DayLoad[] = computePersonLoad(person.id, blocks, sprintDays);
+      const personEventBlocks = eventBlocks.filter(eb => eb.personId === person.id);
+      const loads: DayLoad[] = computePersonLoad(person.id, blocks, sprintDays, eventBlocks);
       const overloaded = loads.some(l => l === 2);
       const conflictCount = personBlocks.filter(b => b.hasConflict).length;
-      const laneLayout = buildBlockLaneLayout(personBlocks);
+      // Build combined lane layout: phase blocks + event blocks together
+      const allLaneable = [
+        ...personBlocks.map(b => ({ id: b.phaseId, startDay: b.startDay, endDay: b.endDay })),
+        ...personEventBlocks.map(eb => ({ id: `ev:${eb.eventId}`, startDay: eb.startDay, endDay: eb.endDay })),
+      ];
+      const combinedLayout = buildBlockLaneLayout(allLaneable);
+      const laneLayout: BlockLaneLayout = {
+        laneByPhaseId: combinedLayout.laneByPhaseId,
+        laneCount: combinedLayout.laneCount,
+      };
       const conflictDays = getConflictDays(personBlocks, sprintDays);
       const rowHeight = Math.max(
         ROW_HEIGHT,
@@ -322,6 +362,7 @@ export function TimelineGrid({
       return [person.id, {
         person,
         personBlocks,
+        personEventBlocks,
         loads,
         overloaded,
         conflictCount,
@@ -376,7 +417,7 @@ export function TimelineGrid({
   const renderPersonRow = (person: Person) => {
     const rowData = rowDataByPersonId.get(person.id);
     if (!rowData) return null;
-    const { personBlocks, loads, overloaded, conflictCount, laneLayout, conflictDays, rowHeight } = rowData;
+    const { personBlocks, personEventBlocks, loads, overloaded, conflictCount, laneLayout, conflictDays, rowHeight } = rowData;
     return (
       <div
         key={person.id}
@@ -471,6 +512,71 @@ export function TimelineGrid({
               />
             ))}
           </div>
+
+          {/* Event blocks */}
+          {personEventBlocks.map(eb => {
+            const style = EVENT_STYLE[eb.type];
+            const isDraggingThis = drag?.mode === 'event' && drag.eventId === eb.eventId;
+            const dragOffset = isDraggingThis ? drag!.deltaDays * dayWidth : 0;
+            const visualStartDay = Math.floor(eb.startDay);
+            const visualEndDay = Math.max(visualStartDay + 1, Math.ceil(eb.endDay));
+            const left = visualStartDay * dayWidth + dragOffset;
+            const width = (visualEndDay - visualStartDay) * dayWidth;
+            const lane = laneLayout.laneByPhaseId.get(`ev:${eb.eventId}`) ?? 0;
+            const top = BLOCK_TOP + lane * (BLOCK_HEIGHT + BLOCK_GAP);
+            const ev = events.find(e => e.id === eb.eventId);
+
+            return (
+              <div
+                key={eb.eventId}
+                data-task-block="true"
+                className={`absolute select-none rounded-md ${isDraggingThis ? 'shadow-lg ring-2 ring-cyan-400 z-10 opacity-90' : 'hover:brightness-95 cursor-grab'}`}
+                style={{
+                  top,
+                  height: BLOCK_HEIGHT,
+                  left: left + 1,
+                  width: Math.max(width - 2, 6),
+                  background: style.bg,
+                  border: `1px solid ${style.border}`,
+                  borderLeft: `3px solid ${style.border}`,
+                  cursor: isDraggingThis ? 'grabbing' : 'grab',
+                  zIndex: 4,
+                  userSelect: 'none',
+                  transition: isDraggingThis ? 'none' : undefined,
+                }}
+                onMouseDown={e => {
+                  if (e.button !== 0) return;
+                  e.preventDefault();
+                  setTooltip(null);
+                  setDrag({
+                    mode: 'event',
+                    taskId: '',
+                    phaseId: '',
+                    eventId: eb.eventId,
+                    originalStartDay: eb.startDay,
+                    minStartDay: 0,
+                    mouseStartX: e.clientX,
+                    deltaDays: 0,
+                  });
+                }}
+                onContextMenu={e => {
+                  e.preventDefault();
+                  if (ev) setEditingEvent(ev);
+                }}
+              >
+                <div className="px-1.5 h-full flex flex-col justify-center overflow-hidden">
+                  <div className="text-[11px] font-semibold truncate leading-tight" style={{ color: style.text }}>
+                    {style.label}
+                  </div>
+                  {width >= 64 && (
+                    <div className="text-[10px] truncate leading-tight" style={{ color: style.text, opacity: 0.7 }}>
+                      {formatDuration(eb.endDay - eb.startDay)}
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          })}
 
           {/* Phase blocks */}
           {personBlocks.map(block => {
@@ -768,7 +874,7 @@ export function TimelineGrid({
             {(() => {
               const reviewBlocks = blocks.filter(b => b.assigneeId === EXTERNAL_REVIEWER_ID);
               if (reviewBlocks.length === 0) return null;
-              const laneLayout = buildBlockLaneLayout(reviewBlocks);
+              const laneLayout = buildBlockLaneLayout(reviewBlocks.map(b => ({ id: b.phaseId, startDay: b.startDay, endDay: b.endDay })));
               const rowHeight = Math.max(
                 ROW_HEIGHT,
                 BLOCK_TOP + laneLayout.laneCount * BLOCK_HEIGHT + (laneLayout.laneCount - 1) * BLOCK_GAP + BLOCK_BOTTOM
@@ -968,6 +1074,24 @@ export function TimelineGrid({
           onSave={onUpdateTask}
           onDelete={onDeleteTask}
           onClose={() => setEditingTask(null)}
+        />
+      )}
+
+      {(editingEvent !== null || newEventDay !== null) && (
+        <EventEditor
+          event={editingEvent}
+          people={people}
+          sprintDays={sprintDays}
+          startDate={startDate}
+          initialStartDay={editingEvent ? null : newEventDay}
+          initialPersonId={editingEvent ? null : newEventPersonId}
+          onSave={onUpsertEvent}
+          onDelete={onDeleteEvent}
+          onClose={() => {
+            setEditingEvent(null);
+            setNewEventDay(null);
+            setNewEventPersonId(null);
+          }}
         />
       )}
     </>

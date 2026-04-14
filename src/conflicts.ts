@@ -1,4 +1,4 @@
-import type { Task, PhaseBlock, DayLoad } from './types';
+import type { Task, PhaseBlock, DayLoad, SprintEvent, EventBlock } from './types';
 
 export const HOURS_PER_DAY = 8;
 export const EXTERNAL_REVIEWER_ID = '__external_reviewers__';
@@ -102,7 +102,20 @@ export function computeTaskPhaseSchedule(task: Task, startDate: string): Schedul
   return schedule;
 }
 
-export function computePhaseBlocks(tasks: Task[], startDate: string): PhaseBlock[] {
+export function computeEventBlocks(events: SprintEvent[], startDate: string): EventBlock[] {
+  return events.map(event => {
+    const endDay = calcEndDay(startDate, event.startDay, event.durationDays);
+    return {
+      eventId: event.id,
+      type: event.type,
+      personId: event.personId,
+      startDay: event.startDay,
+      endDay,
+    };
+  });
+}
+
+export function computePhaseBlocks(tasks: Task[], startDate: string, events?: SprintEvent[]): PhaseBlock[] {
   const blocks: Omit<PhaseBlock, 'hasConflict'>[] = [];
 
   tasks.forEach((task, taskIdx) => {
@@ -158,7 +171,17 @@ export function computePhaseBlocks(tasks: Task[], startDate: string): PhaseBlock
     if (!byAssignee.has(b.assigneeId)) byAssignee.set(b.assigneeId, []);
     byAssignee.get(b.assigneeId)!.push(b);
   }
-  for (const [, ab] of byAssignee) {
+  // Pre-compute event blocks per person for conflict detection
+  const eventBlocksByPerson = new Map<string, EventBlock[]>();
+  if (events) {
+    for (const ev of computeEventBlocks(events, startDate)) {
+      if (!eventBlocksByPerson.has(ev.personId)) eventBlocksByPerson.set(ev.personId, []);
+      eventBlocksByPerson.get(ev.personId)!.push(ev);
+    }
+  }
+
+  for (const [assigneeId, ab] of byAssignee) {
+    const personEvents = eventBlocksByPerson.get(assigneeId) ?? [];
     const maxDay = Math.max(...ab.map(b => Math.ceil(b.endDay)));
     for (let day = 0; day < maxDay; day++) {
       let totalLoad = 0;
@@ -171,6 +194,12 @@ export function computePhaseBlocks(tasks: Task[], startDate: string): PhaseBlock
           totalLoad += overlap;
           contributing.push(b);
         }
+      }
+      // Add event load for this person on this day
+      for (const ev of personEvents) {
+        const overlapStart = Math.max(ev.startDay, day);
+        const overlapEnd = Math.min(ev.endDay, day + 1);
+        totalLoad += Math.max(0, overlapEnd - overlapStart);
       }
       if (totalLoad > 1 + 1e-9) {
         for (const b of contributing) {
@@ -187,7 +216,8 @@ export function computePhaseBlocks(tasks: Task[], startDate: string): PhaseBlock
 export function computePersonLoad(
   personId: string,
   blocks: PhaseBlock[],
-  totalDays: number
+  totalDays: number,
+  eventBlocks?: EventBlock[]
 ): DayLoad[] {
   const load = Array<number>(totalDays).fill(0);
   for (const b of blocks) {
@@ -200,6 +230,18 @@ export function computePersonLoad(
       const overlapEnd = Math.min(b.endDay, d + 1);
       const overlapDays = Math.max(0, overlapEnd - overlapStart);
       load[d] += overlapDays;
+    }
+  }
+  if (eventBlocks) {
+    for (const ev of eventBlocks) {
+      if (ev.personId !== personId) continue;
+      const start = Math.max(0, Math.floor(ev.startDay));
+      const end = Math.min(totalDays, Math.ceil(ev.endDay));
+      for (let d = start; d < end; d++) {
+        const overlapStart = Math.max(ev.startDay, d);
+        const overlapEnd = Math.min(ev.endDay, d + 1);
+        load[d] += Math.max(0, overlapEnd - overlapStart);
+      }
     }
   }
   return load.map(days => (days === 0 ? 0 : days > 1 ? 2 : 1)) as DayLoad[];
