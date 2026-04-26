@@ -92,6 +92,33 @@ function calcEndDay(
 
 export { isWeekend, snapToWorkingDay };
 
+function calcWorkingDurationBetween(
+  startDate: string,
+  startDay: number,
+  endDay: number,
+  unavailableBlocks: EventBlock[] = []
+): number {
+  if (endDay <= startDay) return 0;
+
+  let total = 0;
+  const startIndex = Math.floor(startDay);
+  const endIndex = Math.ceil(endDay);
+
+  for (let day = startIndex; day < endIndex; day++) {
+    if (isWeekend(startDate, day)) continue;
+
+    const overlapStart = Math.max(startDay, day);
+    const overlapEnd = Math.min(endDay, day + 1);
+    if (overlapEnd <= overlapStart) continue;
+
+    const unavailable = getUnavailableOverlapForDay(unavailableBlocks, day);
+    const availableStart = Math.max(overlapStart, day + unavailable);
+    total += Math.max(0, overlapEnd - availableStart);
+  }
+
+  return total;
+}
+
 const TASK_COLORS = [
   '#3b82f6', '#8b5cf6', '#f59e0b', '#22c55e',
   '#ef4444', '#ec4899', '#14b8a6', '#f97316', '#6366f1',
@@ -152,6 +179,18 @@ export function computeTaskPhaseSchedule(
   }
 
   return schedule;
+}
+
+export function computePhaseDurationUntil(
+  startDate: string,
+  phaseAssigneeId: string,
+  startDay: number,
+  endDay: number,
+  events: SprintEvent[] = []
+): number {
+  const eventBlocks = computeEventBlocks(events, startDate);
+  const unavailableBlocks = getUnavailableBlocksForPhase(phaseAssigneeId, eventBlocks);
+  return calcWorkingDurationBetween(startDate, startDay, endDay, unavailableBlocks);
 }
 
 export function computeEventBlocks(events: SprintEvent[], startDate: string): EventBlock[] {

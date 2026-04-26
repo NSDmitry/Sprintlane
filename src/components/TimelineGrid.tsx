@@ -1,6 +1,6 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import type { Person, Task, PhaseBlock, DayLoad, SprintEvent, SprintEventType, EventBlock, TimelineVisibleWeeks } from '../types';
-import { computePersonLoad, computeEventBlocks, formatDuration, HOURS_PER_DAY, EXTERNAL_REVIEWER_ID, TEAM_EVENT_PERSON_ID } from '../conflicts';
+import { computePersonLoad, computeEventBlocks, computePhaseDurationUntil, formatDuration, HOURS_PER_DAY, EXTERNAL_REVIEWER_ID, TEAM_EVENT_PERSON_ID } from '../conflicts';
 import { TaskEditor } from './TaskEditor';
 import { EventEditor } from './EventEditor';
 
@@ -27,6 +27,7 @@ const BLOCK_TOP = 5;
 const BLOCK_HEIGHT = 32;
 const BLOCK_GAP = 6;
 const BLOCK_BOTTOM = 8;
+const MIN_PHASE_DURATION_DAYS = 1 / HOURS_PER_DAY;
 
 const DAY_NAMES = ['вс', 'пн', 'вт', 'ср', 'чт', 'пт', 'сб'];
 
@@ -102,11 +103,12 @@ interface Tooltip {
 }
 
 interface DragState {
-  mode: 'task' | 'phase' | 'event';
+  mode: 'task' | 'phase' | 'event' | 'resize-phase';
   taskId: string;
   phaseId: string;
   eventId?: string;
   originalStartDay: number;
+  originalVisualEndDay?: number;
   minStartDay: number;
   mouseStartX: number;
   deltaDays: number;
@@ -193,6 +195,10 @@ function getVisualBlockBounds(block: PhaseBlock) {
     visualStartDay,
     visualEndDay,
   };
+}
+
+function normalizePhaseDurationDays(days: number): number {
+  return Math.max(MIN_PHASE_DURATION_DAYS, Math.round(days * HOURS_PER_DAY) / HOURS_PER_DAY);
 }
 
 function getConflictDays(personBlocks: PhaseBlock[], personEventBlocks: EventBlock[], totalDays: number): Set<number> {
@@ -317,9 +323,30 @@ export function TimelineGrid({
   const [drag, setDrag] = useState<DragState | null>(null);
   const [containerWidth, setContainerWidth] = useState(0);
   const containerRef = useRef<HTMLDivElement>(null);
+  const suppressNextTimelineClickRef = useRef(false);
+  const suppressTimelineClickTimeoutRef = useRef<number | null>(null);
   // Use ref so mousemove handler always has fresh values without stale closure
   const dragRef = useRef<DragState | null>(null);
   dragRef.current = drag;
+
+  const clearSuppressedTimelineClick = useCallback(() => {
+    suppressNextTimelineClickRef.current = false;
+    if (suppressTimelineClickTimeoutRef.current !== null) {
+      window.clearTimeout(suppressTimelineClickTimeoutRef.current);
+      suppressTimelineClickTimeoutRef.current = null;
+    }
+  }, []);
+
+  const suppressNextTimelineClick = useCallback(() => {
+    suppressNextTimelineClickRef.current = true;
+    if (suppressTimelineClickTimeoutRef.current !== null) {
+      window.clearTimeout(suppressTimelineClickTimeoutRef.current);
+    }
+    suppressTimelineClickTimeoutRef.current = window.setTimeout(() => {
+      suppressNextTimelineClickRef.current = false;
+      suppressTimelineClickTimeoutRef.current = null;
+    }, 180);
+  }, []);
 
   // Measure container width to compute dayWidth automatically
   useEffect(() => {
@@ -334,6 +361,8 @@ export function TimelineGrid({
     return () => observer.disconnect();
   }, []);
 
+  useEffect(() => clearSuppressedTimelineClick, [clearSuppressedTimelineClick]);
+
   const visibleDays = Math.max(1, Math.min(sprintDays, timelineVisibleWeeks * 7));
   const dayWidth = Math.max(MIN_DAY_WIDTH, (containerWidth - LABEL_WIDTH) / visibleDays);
   const weekSegments = getWeekSegments(startDate, sprintDays);
@@ -345,8 +374,17 @@ export function TimelineGrid({
       if (!d) return;
       const deltaX = e.clientX - d.mouseStartX;
       const rawDelta = Math.round(deltaX / dayWidth);
-      const newStart = Math.max(d.minStartDay, d.originalStartDay + rawDelta);
-      const deltaDays = newStart - d.originalStartDay;
+      let deltaDays: number;
+
+      if (d.mode === 'resize-phase') {
+        const originalVisualEndDay = d.originalVisualEndDay ?? Math.ceil(d.originalStartDay + 1);
+        const minVisualEndDay = Math.floor(d.originalStartDay) + 1;
+        deltaDays = Math.max(minVisualEndDay - originalVisualEndDay, rawDelta);
+      } else {
+        const newStart = Math.max(d.minStartDay, d.originalStartDay + rawDelta);
+        deltaDays = newStart - d.originalStartDay;
+      }
+
       if (deltaDays !== d.deltaDays) {
         setDrag(prev => prev ? { ...prev, deltaDays } : null);
       }
@@ -355,7 +393,28 @@ export function TimelineGrid({
     const onMouseUp = () => {
       const d = dragRef.current;
       if (!d) return;
-      if (d.mode === 'event' && d.eventId) {
+      if (d.deltaDays !== 0) suppressNextTimelineClick();
+      if (d.mode === 'resize-phase') {
+        const task = tasks.find(t => t.id === d.taskId);
+        const phase = task?.phases.find(item => item.id === d.phaseId);
+        if (task && phase) {
+          const targetEndDay = (d.originalVisualEndDay ?? Math.ceil(d.originalStartDay + 1)) + d.deltaDays;
+          const nextDurationDays = normalizePhaseDurationDays(
+            computePhaseDurationUntil(startDate, phase.assigneeId, d.originalStartDay, targetEndDay, events)
+          );
+
+          if (phase.durationDays !== nextDurationDays) {
+            onUpdateTask({
+              ...task,
+              phases: task.phases.map(item =>
+                item.id === d.phaseId
+                  ? { ...item, durationDays: nextDurationDays }
+                  : item
+              ),
+            });
+          }
+        }
+      } else if (d.mode === 'event' && d.eventId) {
         const ev = events.find(e => e.id === d.eventId);
         if (ev) {
           const newStartDay = Math.max(0, d.originalStartDay + d.deltaDays);
@@ -396,7 +455,7 @@ export function TimelineGrid({
       window.removeEventListener('mousemove', onMouseMove);
       window.removeEventListener('mouseup', onMouseUp);
     };
-  }, [drag, dayWidth, events, tasks, onUpdateTask, onUpsertEvent]);
+  }, [drag, dayWidth, events, startDate, tasks, onUpdateTask, onUpsertEvent, suppressNextTimelineClick]);
 
   const totalWidth = LABEL_WIDTH + sprintDays * dayWidth;
 
@@ -531,6 +590,13 @@ export function TimelineGrid({
         <div
           className="relative flex-1 overflow-hidden"
           onClick={event => {
+            if (suppressNextTimelineClickRef.current) {
+              event.preventDefault();
+              event.stopPropagation();
+              clearSuppressedTimelineClick();
+              return;
+            }
+
             const target = event.target as HTMLElement | null;
             if (target?.closest('[data-task-block="true"]')) return;
 
@@ -656,14 +722,18 @@ export function TimelineGrid({
 
           {/* Phase blocks */}
           {personBlocks.map(block => {
-            const isDraggingThis =
-              drag?.mode === 'phase'
-                ? drag.phaseId === block.phaseId
-                : drag?.taskId === block.taskId;
-            const dragOffset = isDraggingThis ? drag!.deltaDays * dayWidth : 0;
             const { visualStartDay, visualEndDay } = getVisualBlockBounds(block);
+            const isMovingThis =
+              (drag?.mode === 'task' && drag.taskId === block.taskId) ||
+              (drag?.mode === 'phase' && drag.phaseId === block.phaseId);
+            const isResizingThis = drag?.mode === 'resize-phase' && drag.phaseId === block.phaseId;
+            const isDraggingThis = isMovingThis || isResizingThis;
+            const dragOffset = isMovingThis ? drag!.deltaDays * dayWidth : 0;
+            const displayVisualEndDay = isResizingThis
+              ? Math.max(visualStartDay + 1, visualEndDay + drag!.deltaDays)
+              : visualEndDay;
             const left = visualStartDay * dayWidth + dragOffset;
-            const width = (visualEndDay - visualStartDay) * dayWidth;
+            const width = (displayVisualEndDay - visualStartDay) * dayWidth;
             const isConflict = block.hasConflict && !isDraggingThis;
             const isExt = block.isExternal;
             const lane = laneLayout.laneByPhaseId.get(block.phaseId) ?? 0;
@@ -706,7 +776,7 @@ export function TimelineGrid({
                     ? '4px dashed #94a3b8'
                     : `4px solid ${isConflict ? '#ef4444' : block.taskColor}`,
                   boxShadow,
-                  cursor: isDraggingThis ? 'grabbing' : 'grab',
+                  cursor: isResizingThis ? 'ew-resize' : isDraggingThis ? 'grabbing' : 'grab',
                   opacity: isDimmed ? 0.14 : 1,
                   transition: isDraggingThis ? 'none' : undefined,
                   userSelect: 'none',
@@ -760,7 +830,15 @@ export function TimelineGrid({
                 {(() => {
                   const task = getTask(block.taskId);
                   const phase = task?.phases.find(p => p.id === block.phaseId);
-                  const phaseHours = phase ? Math.round(phase.durationDays * HOURS_PER_DAY) : 0;
+                  const phaseHours = phase
+                    ? Math.round(
+                        (isResizingThis
+                          ? normalizePhaseDurationDays(
+                              computePhaseDurationUntil(startDate, phase.assigneeId, block.startDay, displayVisualEndDay, events)
+                            )
+                          : phase.durationDays) * HOURS_PER_DAY
+                      )
+                    : 0;
                   const blockDuration = block.endDay - block.startDay;
                   const isMultiDay = blockDuration > 1;
                   const textColor = isExt ? '#64748b' : isConflict ? '#b91c1c' : block.taskColor;
@@ -818,10 +896,36 @@ export function TimelineGrid({
                             </span>
                           </div>
                         );
-                      })}
+                        })}
                     </>
                   );
                 })()}
+                <div
+                  className="absolute right-0 top-0 h-full w-3 cursor-ew-resize rounded-r-md"
+                  title="Изменить длительность"
+                  onMouseDown={e => {
+                    if (e.button !== 0) return;
+                    e.preventDefault();
+                    e.stopPropagation();
+                    if (!getTask(block.taskId)) return;
+                    setTooltip(null);
+                    setDrag({
+                      mode: 'resize-phase',
+                      taskId: block.taskId,
+                      phaseId: block.phaseId,
+                      originalStartDay: block.startDay,
+                      originalVisualEndDay: visualEndDay,
+                      minStartDay: block.startDay,
+                      mouseStartX: e.clientX,
+                      deltaDays: 0,
+                    });
+                  }}
+                >
+                  <div
+                    className="absolute right-1 top-1/2 h-4 w-0.5 -translate-y-1/2 rounded-full opacity-45"
+                    style={{ background: isExt ? '#94a3b8' : isConflict ? '#ef4444' : block.taskColor }}
+                  />
+                </div>
                 {isConflict && (
                   <div
                     className="absolute left-2 right-2 pointer-events-none"
@@ -844,7 +948,7 @@ export function TimelineGrid({
   // Global grabbing cursor while dragging
   useEffect(() => {
     if (isDragging) {
-      document.body.style.cursor = 'grabbing';
+      document.body.style.cursor = drag?.mode === 'resize-phase' ? 'ew-resize' : 'grabbing';
       document.body.style.userSelect = 'none';
     } else {
       document.body.style.cursor = '';
@@ -854,7 +958,7 @@ export function TimelineGrid({
       document.body.style.cursor = '';
       document.body.style.userSelect = '';
     };
-  }, [isDragging]);
+  }, [isDragging, drag?.mode]);
 
   useEffect(() => {
     if (!selectedTaskId) return;
@@ -1024,11 +1128,16 @@ export function TimelineGrid({
 
                     {/* Review blocks */}
                     {reviewBlocks.map(block => {
-                      const isDraggingThis = drag?.phaseId === block.phaseId;
-                      const dragOffset = isDraggingThis ? drag!.deltaDays * dayWidth : 0;
                       const { visualStartDay, visualEndDay } = getVisualBlockBounds(block);
+                      const isMovingThis = drag?.mode === 'phase' && drag.phaseId === block.phaseId;
+                      const isResizingThis = drag?.mode === 'resize-phase' && drag.phaseId === block.phaseId;
+                      const isDraggingThis = isMovingThis || isResizingThis;
+                      const dragOffset = isMovingThis ? drag!.deltaDays * dayWidth : 0;
+                      const displayVisualEndDay = isResizingThis
+                        ? Math.max(visualStartDay + 1, visualEndDay + drag!.deltaDays)
+                        : visualEndDay;
                       const left = visualStartDay * dayWidth + dragOffset;
-                      const width = (visualEndDay - visualStartDay) * dayWidth;
+                      const width = (displayVisualEndDay - visualStartDay) * dayWidth;
                       const lane = laneLayout.laneByPhaseId.get(block.phaseId) ?? 0;
                       const top = BLOCK_TOP + lane * (BLOCK_HEIGHT + BLOCK_GAP);
                       const isSelectedTask = selectedTaskId === block.taskId;
@@ -1037,7 +1146,15 @@ export function TimelineGrid({
                       const isMultiDay = blockDuration > 1;
                       const task = getTask(block.taskId);
                       const phase = task?.phases.find(p => p.id === block.phaseId);
-                      const phaseHours = phase ? Math.round(phase.durationDays * HOURS_PER_DAY) : 0;
+                      const phaseHours = phase
+                        ? Math.round(
+                            (isResizingThis
+                              ? normalizePhaseDurationDays(
+                                  computePhaseDurationUntil(startDate, phase.assigneeId, block.startDay, displayVisualEndDay, events)
+                                )
+                              : phase.durationDays) * HOURS_PER_DAY
+                          )
+                        : 0;
 
                       return (
                         <div
@@ -1058,7 +1175,7 @@ export function TimelineGrid({
                             background: '#f8fafc',
                             border: `1.5px dashed ${block.taskColor}80`,
                             borderLeft: `4px solid ${block.taskColor}`,
-                            cursor: isDraggingThis ? 'grabbing' : 'grab',
+                            cursor: isResizingThis ? 'ew-resize' : isDraggingThis ? 'grabbing' : 'grab',
                             opacity: isDimmed ? 0.14 : 1,
                             transition: isDraggingThis ? 'none' : undefined,
                             userSelect: 'none',
@@ -1116,6 +1233,32 @@ export function TimelineGrid({
                                 {block.phaseLabel}
                               </div>
                             )}
+                          </div>
+                          <div
+                            className="absolute right-0 top-0 h-full w-3 cursor-ew-resize rounded-r-md"
+                            title="Изменить длительность"
+                            onMouseDown={e => {
+                              if (e.button !== 0) return;
+                              e.preventDefault();
+                              e.stopPropagation();
+                              if (!task) return;
+                              setTooltip(null);
+                              setDrag({
+                                mode: 'resize-phase',
+                                taskId: block.taskId,
+                                phaseId: block.phaseId,
+                                originalStartDay: block.startDay,
+                                originalVisualEndDay: visualEndDay,
+                                minStartDay: block.startDay,
+                                mouseStartX: e.clientX,
+                                deltaDays: 0,
+                              });
+                            }}
+                          >
+                            <div
+                              className="absolute right-1 top-1/2 h-4 w-0.5 -translate-y-1/2 rounded-full opacity-45"
+                              style={{ background: block.taskColor }}
+                            />
                           </div>
                           {isMultiDay && Array.from({ length: visualEndDay - visualStartDay }, (_, i) => {
                             const day = visualStartDay + i;
