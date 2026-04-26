@@ -21,6 +21,14 @@ function getSprintNumber(startDate: string, sprintDays: number): number {
   return Math.round((current - epoch) / (sprintDays * 24 * 60 * 60 * 1000)) + 1;
 }
 
+function formatSprintRange(startDate: string, sprintDays: number): string {
+  const start = new Date(startDate);
+  const end = new Date(startDate);
+  end.setDate(end.getDate() + sprintDays - 1);
+
+  return `${String(start.getDate()).padStart(2, '0')}.${String(start.getMonth() + 1).padStart(2, '0')} - ${String(end.getDate()).padStart(2, '0')}.${String(end.getMonth() + 1).padStart(2, '0')}`;
+}
+
 export default function App() {
   const store = useAppStore();
   const { state } = store;
@@ -75,12 +83,12 @@ export default function App() {
             >‹</button>
             <button
               onClick={() => setModal('sprint')}
-              className="text-xs text-slate-700 px-2 font-semibold min-w-[120px] max-w-[220px] text-center hover:text-cyan-600 transition-colors"
-              title={`${state.sprint.name} · Спринт ${getSprintNumber(state.sprint.startDate, sprintDays)}`}
+              className="text-xs text-slate-700 px-3 font-semibold min-w-[172px] max-w-[260px] text-center hover:text-cyan-600 transition-colors"
+              title={`${state.sprint.name} · Спринт ${getSprintNumber(state.sprint.startDate, sprintDays)} · ${formatSprintRange(state.sprint.startDate, sprintDays)}`}
             >
-              <span className="block truncate">{state.sprint.name}</span>
+              <span className="block truncate">Спринт {getSprintNumber(state.sprint.startDate, sprintDays)} · {state.sprint.name}</span>
               <span className="block text-[10px] font-medium text-slate-400 leading-none">
-                Спринт {getSprintNumber(state.sprint.startDate, sprintDays)}
+                {formatSprintRange(state.sprint.startDate, sprintDays)}
               </span>
             </button>
             <button

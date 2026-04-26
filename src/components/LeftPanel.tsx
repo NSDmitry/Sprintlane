@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import type { Task, Person, PhaseBlock } from '../types';
+import { formatDuration } from '../conflicts';
 
 interface Props {
   tasks: Task[];
@@ -21,18 +22,23 @@ export function LeftPanel({ tasks, people, blocks, onEditTask, onDeleteTask, onN
   const filtered = tasks.filter(t =>
     t.name.toLowerCase().includes(search.toLowerCase())
   );
-  const sprintGoalTasks = filtered.filter(task => task.sprintGoal);
-  const otherTasks = filtered.filter(task => !task.sprintGoal);
+  const conflictTasks = filtered.filter(task => taskHasConflict(task.id));
+  const sprintGoalTasks = filtered.filter(task => task.sprintGoal && !taskHasConflict(task.id));
+  const unplannedTasks = filtered.filter(task => !task.sprintGoal && !taskHasConflict(task.id) && blocks.every(b => b.taskId !== task.id));
+  const otherTasks = filtered.filter(task => !task.sprintGoal && !taskHasConflict(task.id) && blocks.some(b => b.taskId === task.id));
 
   const renderTaskCard = (task: Task) => {
     const conflict = taskHasConflict(task.id);
     const taskBlocks = blocks.filter(b => b.taskId === task.id);
     const taskColor = taskBlocks[0]?.taskColor ?? '#3b82f6';
+    const duration = task.phases.reduce((sum, phase) => sum + phase.durationDays, 0);
 
     return (
       <div
         key={task.id}
-        className="mx-2 mb-1 rounded-lg border border-slate-200 bg-white hover:border-cyan-300 hover:shadow-sm transition-all cursor-pointer group"
+        className={`mx-2 mb-1 rounded-lg border bg-white transition-all cursor-pointer group ${
+          conflict ? 'border-red-200 hover:border-red-300 hover:shadow-sm' : 'border-slate-200 hover:border-cyan-300 hover:shadow-sm'
+        }`}
         onClick={() => onEditTask(task)}
       >
         <div className="flex items-start gap-2 px-3 py-2">
@@ -48,13 +54,24 @@ export function LeftPanel({ tasks, people, blocks, onEditTask, onDeleteTask, onN
               </span>
               {task.sprintGoal && <span className="text-xs flex-shrink-0" title="Цель спринта">🔥</span>}
             </div>
-            <div className="flex flex-wrap gap-1 mt-1">
+            <div className="mt-1 flex items-center gap-1.5 text-[10px] text-slate-400">
+              <span>{task.phases.length} фаз</span>
+              <span>·</span>
+              <span>{formatDuration(duration)}</span>
+              {taskBlocks.length === 0 && (
+                <>
+                  <span>·</span>
+                  <span className="font-medium text-slate-500">не на сетке</span>
+                </>
+              )}
+            </div>
+            <div className="flex flex-wrap gap-x-2 gap-y-0.5 mt-1">
               {task.phases.map(phase => {
                 const person = getPerson(phase.assigneeId);
                 return (
                   <span
                     key={phase.id}
-                    className="inline-flex items-center gap-1 text-[10px] text-slate-500"
+                    className="inline-flex items-center gap-1 text-[10px] text-slate-500 min-w-0"
                   >
                     <span
                       className="w-1.5 h-1.5 rounded-full flex-shrink-0"
@@ -121,8 +138,10 @@ export function LeftPanel({ tasks, people, blocks, onEditTask, onDeleteTask, onN
             {tasks.length === 0 ? 'Нет задач. Нажмите + чтобы добавить.' : 'Ничего не найдено'}
           </div>
         )}
+        {renderSection('С Конфликтами', conflictTasks)}
         {renderSection('Цели Спринта', sprintGoalTasks)}
-        {renderSection('Остальные Задачи', otherTasks)}
+        {renderSection('Запланированы', otherTasks)}
+        {renderSection('Не На Сетке', unplannedTasks)}
       </div>
 
       {/* Footer stats */}

@@ -19,13 +19,13 @@ interface Props {
 }
 
 const LABEL_WIDTH = 200;
-const ROW_HEIGHT = 52;
-const HEADER_HEIGHT = 52;
-const MIN_DAY_WIDTH = 24; // px — minimum before horizontal scroll kicks in
-const BLOCK_TOP = 6;
-const BLOCK_HEIGHT = 36;
+const ROW_HEIGHT = 46;
+const HEADER_HEIGHT = 68;
+const MIN_DAY_WIDTH = 56; // px — minimum before horizontal scroll kicks in
+const BLOCK_TOP = 5;
+const BLOCK_HEIGHT = 32;
 const BLOCK_GAP = 6;
-const BLOCK_BOTTOM = 10;
+const BLOCK_BOTTOM = 8;
 
 const DAY_NAMES = ['вс', 'пн', 'вт', 'ср', 'чт', 'пт', 'сб'];
 
@@ -42,6 +42,32 @@ function getDayMeta(startDate: string, i: number) {
   };
 }
 
+function formatShortDate(date: Date): string {
+  return `${String(date.getDate()).padStart(2, '0')}.${String(date.getMonth() + 1).padStart(2, '0')}`;
+}
+
+function getWeekSegments(startDate: string, totalDays: number) {
+  const segments: Array<{ start: number; length: number; label: string }> = [];
+  let start = 0;
+
+  for (let i = 1; i <= totalDays; i++) {
+    const current = new Date(startDate);
+    current.setDate(current.getDate() + i);
+
+    if (i === totalDays || current.getDay() === 1) {
+      const segmentStart = new Date(startDate);
+      segmentStart.setDate(segmentStart.getDate() + start);
+      const segmentEnd = new Date(startDate);
+      segmentEnd.setDate(segmentEnd.getDate() + i - 1);
+      const label = `Неделя ${segments.length + 1} · ${formatShortDate(segmentStart)}-${formatShortDate(segmentEnd)}`;
+      segments.push({ start, length: i - start, label });
+      start = i;
+    }
+  }
+
+  return segments;
+}
+
 function isWeekend(startDate: string, i: number) {
   const d = new Date(startDate);
   d.setDate(d.getDate() + i);
@@ -51,6 +77,12 @@ function isWeekend(startDate: string, i: number) {
 
 const LOAD_BG: Record<DayLoad, string> = {
   0: '#e2e8f0',
+  1: '#22c55e',
+  2: '#ef4444',
+};
+
+const LOAD_LABEL_BG: Record<DayLoad, string> = {
+  0: '#e5e7eb',
   1: '#22c55e',
   2: '#ef4444',
 };
@@ -240,6 +272,34 @@ function sortPeopleForTimeline(items: Person[]): Person[] {
   });
 }
 
+function WorkloadMiniStrip({ loads, startDate }: { loads: DayLoad[]; startDate: string }) {
+  return (
+    <div className="mt-1 grid gap-[2px]" style={{ gridTemplateColumns: `repeat(${loads.length}, minmax(0, 1fr))` }}>
+      {loads.map((load, i) => {
+        const weekend = isWeekend(startDate, i);
+        return (
+          <div
+            key={i}
+            className="h-1 rounded-full"
+            style={{
+              background: weekend ? 'transparent' : LOAD_LABEL_BG[load],
+              opacity: weekend ? 0 : load === 0 ? 0.9 : 1,
+            }}
+          />
+        );
+      })}
+    </div>
+  );
+}
+
+function getLoadSummary(loads: DayLoad[], startDate: string) {
+  const workingDays = loads.filter((_, i) => !isWeekend(startDate, i)).length;
+  const busyDays = loads.filter((load, i) => !isWeekend(startDate, i) && load > 0).length;
+  const overloadDays = loads.filter((load, i) => !isWeekend(startDate, i) && load === 2).length;
+
+  return { workingDays, busyDays, overloadDays };
+}
+
 export function TimelineGrid({
   people, tasks, blocks, events, sprintDays, startDate,
   onUpdateTask, onDeleteTask, onCreateTaskAtDay,
@@ -274,6 +334,7 @@ export function TimelineGrid({
   }, []);
 
   const dayWidth = Math.max(MIN_DAY_WIDTH, (containerWidth - LABEL_WIDTH) / sprintDays);
+  const weekSegments = getWeekSegments(startDate, sprintDays);
 
   // Global mouse handlers for drag
   useEffect(() => {
@@ -424,15 +485,17 @@ export function TimelineGrid({
     const rowData = rowDataByPersonId.get(person.id);
     if (!rowData) return null;
     const { personBlocks, personEventBlocks, loads, overloaded, conflictCount, laneLayout, conflictDays, rowHeight } = rowData;
+    const { workingDays, busyDays, overloadDays } = getLoadSummary(loads, startDate);
+
     return (
       <div
         key={person.id}
-        className={`flex border-b border-slate-100 ${overloaded ? 'bg-red-50/30' : 'bg-white hover:bg-slate-50/50'} transition-colors`}
+        className={`flex border-b border-slate-100 ${overloaded ? 'bg-red-50/35' : 'bg-white hover:bg-slate-50/70'} transition-colors`}
         style={{ height: rowHeight }}
       >
         {/* Person label — fixed width */}
         <div
-          className="flex-shrink-0 flex items-center gap-2.5 px-4 border-r border-slate-200"
+          className="flex-shrink-0 flex items-center gap-2.5 px-4 border-r border-slate-200 bg-white/80"
           style={{ width: LABEL_WIDTH }}
         >
           {/* Avatar */}
@@ -452,20 +515,13 @@ export function TimelineGrid({
                 </span>
               )}
             </div>
-            <div className="text-[10px] text-slate-400 truncate">{person.role}</div>
-
-            {/* Workload dots */}
-            <div className="flex gap-px mt-0.5">
-              {loads.map((load, i) =>
-                isWeekend(startDate, i) ? null : (
-                  <div
-                    key={i}
-                    className="rounded-sm"
-                    style={{ width: 4, height: 4, background: LOAD_BG[load] }}
-                  />
-                )
-              )}
+            <div className="flex items-center gap-1.5 text-[10px] text-slate-400 truncate">
+              <span className="truncate">{person.role}</span>
+              <span className={overloadDays > 0 ? 'font-semibold text-red-500' : 'font-medium text-slate-500'}>
+                {busyDays}/{workingDays}д
+              </span>
             </div>
+            <WorkloadMiniStrip loads={loads} startDate={startDate} />
           </div>
         </div>
 
@@ -495,11 +551,23 @@ export function TimelineGrid({
                 key={i}
                 className={`absolute inset-y-0 border-r ${
                   isConflictDay ? 'bg-red-100/70 border-red-200'
-                    : wk ? 'bg-red-50/70 border-red-100'
-                    : isToday ? 'bg-cyan-50/40 border-cyan-100'
+                    : wk ? 'bg-rose-50/35 border-rose-100'
+                    : isToday ? 'bg-cyan-50/60 border-cyan-200'
                     : 'border-slate-100'
                 }`}
                 style={{ left: i * dayWidth, width: dayWidth }}
+              />
+            );
+          })}
+
+          {Array.from({ length: sprintDays }, (_, i) => {
+            const { isToday } = getDayMeta(startDate, i);
+            if (!isToday) return null;
+            return (
+              <div
+                key={`today-${i}`}
+                className="absolute inset-y-0 w-0.5 bg-cyan-500/80 pointer-events-none"
+                style={{ left: i * dayWidth }}
               />
             );
           })}
@@ -544,7 +612,7 @@ export function TimelineGrid({
                   width: Math.max(width - 2, 6),
                   background: style.bg,
                   border: `1px solid ${style.border}`,
-                  borderLeft: `3px solid ${style.border}`,
+                  borderLeft: `4px solid ${style.border}`,
                   cursor: isDraggingThis ? 'grabbing' : 'grab',
                   zIndex: 4,
                   userSelect: 'none',
@@ -570,8 +638,8 @@ export function TimelineGrid({
                   if (ev) setEditingEvent(ev);
                 }}
               >
-                <div className="px-1.5 h-full flex flex-col justify-center overflow-hidden">
-                  <div className="text-[11px] font-semibold truncate leading-tight" style={{ color: style.text }}>
+                <div className="px-2 h-full flex flex-col justify-center overflow-hidden">
+                  <div className="text-[10px] font-bold uppercase tracking-wide truncate leading-tight" style={{ color: style.text }}>
                     {style.label}
                   </div>
                   {width >= 64 && (
@@ -626,15 +694,15 @@ export function TimelineGrid({
                   height: BLOCK_HEIGHT,
                   left: left + 1,
                   width: Math.max(width - 2, 6),
-                  background: isExt ? '#f1f5f9' : isConflict ? '#fee2e2' : `${block.taskColor}30`,
+                  background: isExt ? '#f8fafc' : isConflict ? '#fee2e2' : `${block.taskColor}24`,
                   border: isExt
                     ? '1.5px dashed #94a3b8'
                     : isConflict
                       ? '1px solid #ef4444'
-                      : `none`,
+                      : `1px solid ${block.taskColor}35`,
                   borderLeft: isExt
-                    ? '3px dashed #94a3b8'
-                    : `3px solid ${isConflict ? '#ef4444' : block.taskColor}`,
+                    ? '4px dashed #94a3b8'
+                    : `4px solid ${isConflict ? '#ef4444' : block.taskColor}`,
                   boxShadow,
                   cursor: isDraggingThis ? 'grabbing' : 'grab',
                   opacity: isDimmed ? 0.14 : 1,
@@ -697,7 +765,7 @@ export function TimelineGrid({
 
                   return (
                     <>
-                      <div className="px-1.5 h-full flex flex-col justify-center overflow-hidden pr-5">
+                      <div className="px-2 h-full flex flex-col justify-center overflow-hidden pr-5">
                         <div
                           className="text-[11px] font-semibold truncate leading-tight flex items-baseline gap-1"
                           style={{ color: textColor }}
@@ -708,15 +776,15 @@ export function TimelineGrid({
                           </span>
                           {phaseHours > 0 && width >= 44 && (
                             <span
-                              className="flex-shrink-0 text-[9px] font-normal leading-none rounded px-0.5"
-                              style={{ color: textColor, opacity: 0.65, background: `${block.taskColor}18` }}
+                              className="flex-shrink-0 text-[9px] font-semibold leading-none rounded px-1 py-px"
+                              style={{ color: isConflict ? '#991b1b' : textColor, opacity: 0.78, background: isConflict ? '#fecaca' : `${block.taskColor}18` }}
                             >
                               {phaseHours}ч
                             </span>
                           )}
                         </div>
                         {width >= 64 && (
-                          <div className={`text-[10px] truncate leading-tight ${isExt ? 'text-slate-400' : isConflict ? 'text-red-400' : 'text-slate-400'}`}>
+                          <div className={`text-[10px] truncate leading-tight ${isExt ? 'text-slate-500' : isConflict ? 'text-red-500' : 'text-slate-500'}`}>
                             {block.phaseLabel}
                           </div>
                         )}
@@ -811,31 +879,50 @@ export function TimelineGrid({
             style={{ height: HEADER_HEIGHT }}
           >
             <div
-              className="flex-shrink-0 flex items-center px-4 border-r border-slate-200 bg-slate-50"
+              className="flex-shrink-0 flex flex-col justify-center px-4 border-r border-slate-200 bg-slate-50"
               style={{ width: LABEL_WIDTH }}
             >
               <span className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Участник</span>
+              <span className="text-[10px] text-slate-400">занятость по рабочим дням</span>
             </div>
-            {Array.from({ length: sprintDays }, (_, i) => {
-              const { day, month, dayName, isWeekend: wk, isToday } = getDayMeta(startDate, i);
-              return (
-                <div
-                  key={i}
-                  className={`flex-shrink-0 flex flex-col items-center justify-center border-r select-none
-                    ${wk ? 'bg-red-50 border-red-200'
-                      : isToday ? 'bg-cyan-50 border-cyan-200'
-                      : 'bg-white border-slate-200'}`}
-                  style={{ width: dayWidth }}
-                >
-                  <span className={`font-bold text-[11px] ${wk ? 'text-red-400' : isToday ? 'text-cyan-600' : 'text-slate-700'}`}>
-                    {String(day).padStart(2, '0')}.{String(month).padStart(2, '0')}
-                  </span>
-                  <span className={`text-[10px] ${wk ? 'text-red-300' : isToday ? 'text-cyan-400' : 'text-slate-400'}`}>
-                    {dayName}{isToday ? ' •' : ''}
-                  </span>
-                </div>
-              );
-            })}
+            <div className="flex-shrink-0" style={{ width: sprintDays * dayWidth }}>
+              <div className="flex h-6 border-b border-slate-100 bg-slate-50">
+                {weekSegments.map(segment => (
+                  <div
+                    key={segment.start}
+                    className="flex items-center px-3 border-r border-slate-200 text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-400 select-none"
+                    style={{ width: segment.length * dayWidth }}
+                  >
+                    <span className="truncate">{segment.label}</span>
+                  </div>
+                ))}
+              </div>
+              <div className="flex h-[42px]">
+                {Array.from({ length: sprintDays }, (_, i) => {
+                  const { day, month, dayName, isWeekend: wk, isToday } = getDayMeta(startDate, i);
+                  return (
+                    <div
+                      key={i}
+                      className={`relative flex-shrink-0 flex flex-col items-center justify-center border-r select-none
+                        ${wk ? 'bg-rose-50/60 border-rose-100'
+                          : isToday ? 'bg-cyan-50 border-cyan-200'
+                          : 'bg-white border-slate-200'}`}
+                      style={{ width: dayWidth }}
+                    >
+                      {isToday && (
+                        <div className="absolute top-0 bottom-0 left-0 w-0.5 bg-cyan-500" />
+                      )}
+                      <span className={`font-bold text-[11px] ${wk ? 'text-rose-400' : isToday ? 'text-cyan-700' : 'text-slate-700'}`}>
+                        {String(day).padStart(2, '0')}.{String(month).padStart(2, '0')}
+                      </span>
+                      <span className={`text-[10px] ${wk ? 'text-rose-300' : isToday ? 'text-cyan-500' : 'text-slate-400'}`}>
+                        {dayName}{isToday ? ' сегодня' : ''}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
           </div>
 
           <div className="relative">
@@ -874,7 +961,7 @@ export function TimelineGrid({
             {/* Empty state */}
             {people.length === 0 && (
               <div className="flex items-center justify-center py-24 text-slate-400 text-sm">
-                Добавьте участников через кнопку «Команда»
+                Добавьте участников через кнопку «Участники»
               </div>
             )}
 
@@ -888,14 +975,14 @@ export function TimelineGrid({
                 BLOCK_TOP + laneLayout.laneCount * BLOCK_HEIGHT + (laneLayout.laneCount - 1) * BLOCK_GAP + BLOCK_BOTTOM
               );
               return (
-                <div className="flex border-t-2 border-slate-300 bg-slate-50/60" style={{ height: rowHeight }}>
+                <div className="flex border-t-2 border-slate-300 bg-slate-50/70" style={{ height: rowHeight }}>
                   {/* Label */}
                   <div
-                    className="flex-shrink-0 flex items-center gap-2.5 px-4 border-r border-slate-200"
+                    className="flex-shrink-0 flex items-center gap-2.5 px-4 border-r border-slate-200 bg-slate-50"
                     style={{ width: LABEL_WIDTH }}
                   >
-                    <div className="w-8 h-8 rounded-full flex items-center justify-center bg-slate-300 text-slate-600 text-sm flex-shrink-0">
-                      👥
+                    <div className="w-8 h-8 rounded-full flex items-center justify-center bg-slate-200 text-slate-600 text-[10px] font-bold flex-shrink-0">
+                      CR
                     </div>
                     <div className="flex-1 min-w-0">
                       <div className="text-xs font-semibold text-slate-600 truncate">Внешние ревьюеры</div>
@@ -912,11 +999,23 @@ export function TimelineGrid({
                         <div
                           key={i}
                           className={`absolute inset-y-0 border-r ${
-                            wk ? 'bg-red-50/70 border-red-100'
-                            : isToday ? 'bg-cyan-50/40 border-cyan-100'
+                            wk ? 'bg-rose-50/35 border-rose-100'
+                            : isToday ? 'bg-cyan-50/60 border-cyan-200'
                             : 'border-slate-100'
                           }`}
                           style={{ left: i * dayWidth, width: dayWidth }}
+                        />
+                      );
+                    })}
+
+                    {Array.from({ length: sprintDays }, (_, i) => {
+                      const { isToday } = getDayMeta(startDate, i);
+                      if (!isToday) return null;
+                      return (
+                        <div
+                          key={`today-review-${i}`}
+                          className="absolute inset-y-0 w-0.5 bg-cyan-500/80 pointer-events-none"
+                          style={{ left: i * dayWidth }}
                         />
                       );
                     })}
@@ -954,9 +1053,9 @@ export function TimelineGrid({
                             height: BLOCK_HEIGHT,
                             left: left + 1,
                             width: Math.max(width - 2, 6),
-                            background: `${block.taskColor}20`,
-                            border: 'none',
-                            borderLeft: `3px solid ${block.taskColor}`,
+                            background: '#f8fafc',
+                            border: `1.5px dashed ${block.taskColor}80`,
+                            borderLeft: `4px solid ${block.taskColor}`,
                             cursor: isDraggingThis ? 'grabbing' : 'grab',
                             opacity: isDimmed ? 0.14 : 1,
                             transition: isDraggingThis ? 'none' : undefined,
@@ -992,7 +1091,7 @@ export function TimelineGrid({
                           }}
                           onMouseLeave={() => setTooltip(null)}
                         >
-                          <div className="px-1.5 h-full flex flex-col justify-center overflow-hidden pr-2">
+                          <div className="px-2 h-full flex flex-col justify-center overflow-hidden pr-2">
                             <div
                               className="text-[11px] font-semibold truncate leading-tight flex items-baseline gap-1"
                               style={{ color: block.taskColor }}
